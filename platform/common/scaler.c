@@ -34,7 +34,7 @@
 
 #define Weight2_1(A, B)  ((((cR(A) + cR(A) + cR(B)) / 3) & 0xf8) << 8 | (((cG(A) + cG(A) + cG(B)) / 3) & 0xfc) << 3 | (((cB(A) + cB(A) + cB(B)) / 3) & 0xf8) >> 3)
 
-
+int static PICO_FULL_HEIGHT = 480;
 uint16_t hexcolor_to_rgb565(const uint32_t color)
 {
     uint8_t colorr = ((color >> 16) & 0xFF);
@@ -51,7 +51,7 @@ uint16_t hexcolor_to_rgb565(const uint32_t color)
 
 void upscale_inter_x2_scanline(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst;
+    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
@@ -93,7 +93,7 @@ void upscale_inter_x2_scanline(uint32_t *dst, uint32_t *src, int width, int high
 
 void upscale_inter_x2_grid(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst;
+    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
@@ -180,7 +180,7 @@ void upscale_inter_x2(uint32_t *dst, uint32_t *src, int width, int high) {
 
 void upscale_inter_x2_scanline_vertical(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst;
+    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
@@ -212,6 +212,51 @@ void upscale_inter_x2_scanline_vertical(uint32_t *dst, uint32_t *src, int width,
             *(BlockDst + 1) = scanline_color;
             // -- next row 2 --
             *(BlockDst +  width )  = color;
+            *(BlockDst +  width + 1)  = scanline_color;
+            BlockSrc += 1;
+            BlockDst += 2;
+        }
+    }
+}
+
+void upscale_inter_x2_scanline_with_zero(uint32_t *dst, uint32_t *src, int width, int high, int zeroCount) {
+    uint16_t* Src16 = (uint16_t*) src;
+    uint16_t* Dst16 = (uint16_t*) dst + zeroCount;
+    int interWidth = width >> 1;
+    int interHigh = high >> 1;
+    int zeroFill = 0;
+    uint32_t BlockX, BlockY;
+    uint16_t* BlockSrc;
+    uint16_t* BlockDst;
+/*    for (zeroFill = 0; zeroFill < zeroCount; zeroFill++) {
+        //*(BlockDst + zeroFill) &= 0;
+    }*/
+    uint16_t gcolor = hexcolor_to_rgb565(0x000000);
+    for (BlockY = 0; BlockY < interHigh; BlockY++)
+    {
+        //littlehui * 2
+        BlockSrc = Src16 + BlockY * interWidth * 1;
+        BlockDst = Dst16 + BlockY * width * 1 * 2;
+        for (BlockX = 0; BlockX < interWidth; BlockX++)
+        {
+            /* Horizontally:
+             * Before(1):
+             * (a)
+             * After(4):
+             * (a)(a)
+             * (c)(c)
+             */
+            //one
+
+            uint16_t  a = *(BlockSrc);
+            //fprintf(stderr, "row one is %d\n", a);
+
+            uint16_t  scanline_color = Weight2_1( a, gcolor);
+            // -- Row 1 --
+            *(BlockDst) = a;
+            *(BlockDst + 1) = a;
+            // -- next row 2 --
+            *(BlockDst +  width )  = scanline_color;
             *(BlockDst +  width + 1)  = scanline_color;
             BlockSrc += 1;
             BlockDst += 2;

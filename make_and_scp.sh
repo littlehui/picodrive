@@ -1,5 +1,5 @@
 ##make -f Makefile.rg350 clean
-make -f Makefile clean
+##make -f Makefile clean
 make -f Makefile
 mv picodrive.elf picodrive/
 make -f Makefile opk

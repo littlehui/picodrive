@@ -38,9 +38,10 @@ extern int g_screen_width;
 extern int g_screen_height;
 extern int g_screen_ppitch;
 extern int engineState;
+extern int heigh_need_fill;
 extern void plat_video_loop_prepare();
 
-extern int vout_mode_hw_scanline_vertical;
+extern int vout_mode_hw_scanline_vertical, vout_mode_hw2;
 extern struct plat_target plat_target;
 extern int hardwarex2Flag;
 
@@ -1542,14 +1543,18 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
   //littlehui modify
     if (hardwarex2Flag) {
         g_screen_width = (Pico.video.reg[12] & 1) ? 640 : 512;
-        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : 480;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : plat_target.vout_method == vout_mode_hw2 ? 448 : 480;
     } else {
         g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
         g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
     }
-/*    if (plat_target.vout_method == vout_mode_hw_scanline_vertical) {
-        g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
-    }*/
+    if (!(Pico.video.reg[1] & 8) && plat_target.vout_method != vout_mode_hw2) {
+        //hight not enough and scanline need fill
+        heigh_need_fill = 1;
+    } else {
+        //hight enough
+        heigh_need_fill = 0;
+    }
 
   g_screen_ppitch = g_screen_width;
 

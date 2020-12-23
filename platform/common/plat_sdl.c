@@ -179,43 +179,49 @@ void plat_video_flip(void)
         //fprintf(stderr, "before SDL_Flip plat_sdl_screen->piexl %d \n", plat_sdl_screen->pixels);
 
         SDL_Flip(plat_sdl_screen);
-        //fprintf(stderr, "after SDL_Flip plat_sdl_screen->piexl %d \n", plat_sdl_screen->pixels);
-
-        //plat_sdl_screen->pixels;
-        //fprintf(stderr, "plat_video_flip  plat_sdl_screen->w = %d, plat_sdl_screen->h  = %d \n", plat_sdl_screen->w, plat_sdl_screen->h);
-        //fprintf(stderr, "shadow_fb = %d \n", shadow_fb);
-
-        //upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)shadow_fb, plat_sdl_screen->w, plat_sdl_screen->h);
-		//g_screen_ptr = plat_sdl_screen->pixels;
-        //tmp_sdl_screen->pixels =malloc(640 * 480);
-
-        //fprintf(stderr, "before memcpy SDL_Flip tmp_sdl_screen_ptr %d \n", *(uint32_t *)tmp_sdl_screen_ptr + 2);
-        //memcpy(tmp_sdl_screen_ptr, plat_sdl_screen->pixels, sizeof(plat_sdl_screen->pixels));
-        //fprintf(stderr, "after memcpy SDL_Flip tmp_sdl_screen_ptr %d \n", *(uint32_t *)tmp_sdl_screen_ptr + 2);
-        //g_screen_ptr = NULL;
         if (plat_target.vout_method == vout_mode_hw2) {
             upscale_inter_x2((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
             PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         } else if (plat_target.vout_method == vout_mode_hw_scanline) {
-            upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            if (heigh_need_fill) {
+                //fill zero
+                upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else {
+                upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            }
             PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         } else if (plat_target.vout_method == vout_mode_hw_grid) {
-            upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            if (heigh_need_fill) {
+                upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else {
+                upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            }
             PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         } else if (plat_target.vout_method == 0) {
+            //hx X1
             g_screen_ptr = plat_sdl_screen->pixels;
             PicoDrawSetOutBuf(g_screen_ptr, g_screen_ppitch * 2);
         } else if (plat_target.vout_method == vout_mode_hw_scanline_vertical) {
-            upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            if (heigh_need_fill) {
+                //fill zero
+                upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else {
+                upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            }
             PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         } else if (plat_target.vout_method == vout_mode_auto_scanline) {
             //width and high
             if (g_screen_width == 640 && g_screen_height == 480) {
                 upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
             } else {
-                upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                if (heigh_need_fill) {
+                    upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                } else {
+                    upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                }
+                PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
             }
-            PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         }
 	}
 }
@@ -278,7 +284,12 @@ void plat_video_menu_leave(void)
     }*/
     fprintf(stderr, "plat_video_menu_leave 1 enter w = %d, h = %d\n", g_screen_width, g_screen_height);
     //littlehui modify
-    //memset(plat_sdl_screen_ptr, 0, g_screen_width * g_screen_height);
+/*    if (heigh_need_fill) {
+        memset(plat_sdl_screen->pixels, 0, g_screen_width * 16);
+        memset(plat_sdl_screen_scanline_ptr, 0, g_screen_width * 16);
+    }*/
+    //plat_sdl_screen_scanline_ptr = calloc(1, g_screen_width * g_screen_height);
+    //plat_sdl_screen_ptr = calloc(1, g_screen_width * g_screen_height);
     if (plat_target.vout_method == 0) {
         hardwarex2Flag = 0;
     }
@@ -344,7 +355,7 @@ void plat_init(void)
     //tmp_sdl_screen->pixels = malloc(shadow_size);
 	g_menubg_ptr = calloc(1, shadow_size);
     plat_sdl_screen_ptr = calloc(1, shadow_size);
-
+    //plat_sdl_screen_scanline_ptr = calloc(1, shadow_size);
     if (shadow_fb == NULL || g_menubg_ptr == NULL) {
 		fprintf(stderr, "OOM\n");
 		exit(1);
@@ -377,4 +388,5 @@ void plat_finish(void)
 	g_menubg_ptr = NULL;
 	plat_sdl_finish();
     plat_sdl_screen_ptr = NULL;
+    //plat_sdl_screen_scanline_ptr = NULL;
 }

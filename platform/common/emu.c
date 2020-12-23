@@ -48,6 +48,7 @@ void *g_screen_ptr;
 int g_screen_width  = 320;
 int g_screen_height = 240;
 int g_screen_ppitch = 320; // pitch in pixels
+int heigh_need_fill = 0;
 
 const char *PicoConfigFile = "config2.cfg";
 currentConfig_t currentConfig, defaultConfig;
@@ -1210,8 +1211,6 @@ void emu_update_input(void)
 	}
 
 	events &= ~prev_events;
-
-    fprintf(stderr, "events is =-=========== %d \n", events);
 
 	if (PicoIn.AHW == PAHW_PICO)
 		run_events_pico(events);
