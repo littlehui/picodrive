@@ -495,7 +495,8 @@ static void draw_savestate_bg(int slot)
 	if (!fname) return;
 
 	oldstate = get_oldstate_for_preview();
-	if (oldstate == NULL) return;
+
+    if (oldstate == NULL) return;
 
 	if (strcmp(fname + strlen(fname) - 3, ".gz") == 0) {
 		file = gzopen(fname, "rb");

@@ -138,9 +138,9 @@ static void draw_savestate_bg(int slot)
 {
 	const char *fname;
 	void *tmp_state;
-
 	fname = emu_get_save_fname(1, 0, slot, NULL);
-	if (!fname)
+
+    if (!fname)
 		return;
 
 	tmp_state = PicoTmpStateSave();
@@ -148,11 +148,18 @@ static void draw_savestate_bg(int slot)
 	PicoStateLoadGfx(fname);
 
 	/* do a frame and fetch menu bg */
-	pemu_forced_frame(0, 0);
+    fprintf(stderr, "pemu_forced_frame: start\n");
+
+    pemu_forced_frame(0, 0);
+    fprintf(stderr, "make_bg: start\n");
 
 	make_bg(0);
 
-	PicoTmpStateRestore(tmp_state);
+    fprintf(stderr, "PicoTmpStateRestore: start\n");
+
+    PicoTmpStateRestore(tmp_state);
+    fprintf(stderr, "PicoTmpStateRestore: end\n");
+
 }
 
 // --------- loading ROM screen ----------
@@ -316,7 +323,7 @@ me_bind_action emuctrl_actions[] =
 	{ "Volume Up        ", PEV_VOL_UP },
 	{ "Fast forward     ", PEV_FF },
 	{ "Reset Game       ", PEV_RESET },
-	{ "Enter Menu       ", PEV_MENU },
+	{ "Enter Menu       ",  PEV_MENU },
 	{ "Pico Next page   ", PEV_PICO_PNEXT },
 	{ "Pico Prev page   ", PEV_PICO_PPREV },
 	{ "Pico Switch input", PEV_PICO_SWINP },
@@ -1015,8 +1022,10 @@ static int main_menu_handler(int id, int keys)
 			return 1;
 		break;
 	case MA_MAIN_SAVE_STATE:
-		if (PicoGameLoaded)
-			return menu_loop_savestate(0);
+		if (PicoGameLoaded) {
+            int returnValue = menu_loop_savestate(0);
+            return returnValue;
+        }
 		break;
 	case MA_MAIN_LOAD_STATE:
 		if (PicoGameLoaded)

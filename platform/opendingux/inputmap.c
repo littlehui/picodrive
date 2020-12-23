@@ -39,7 +39,7 @@ const struct menu_keymap in_sdl_key_map[] =
 };
 
 const char * const in_sdl_key_names[SDLK_LAST] = {
-	[SDLK_UP] = "UP",
+/*	[SDLK_UP] = "UP",
 	[SDLK_DOWN] = "DOWN",
 	[SDLK_LEFT] = "LEFT",
 	[SDLK_RIGHT] = "RIGHT",
@@ -51,6 +51,28 @@ const char * const in_sdl_key_names[SDLK_LAST] = {
 	[SDLK_BACKSPACE] = "R",
 	[SDLK_RETURN] = "START",
 	[SDLK_ESCAPE] = "SELECT",
-	[SDLK_POWER] = "POWER",
-	[SDLK_PAUSE] = "LOCK",
+	[SDLK_HOME] = "POWER",
+	[SDLK_PAUSE] = "LOCK",*/
+
+        [SDLK_UP] = "UP",
+        [SDLK_DOWN] = "DOWN",
+        [SDLK_LEFT] = "LEFT",
+        [SDLK_RIGHT] = "RIGHT",
+        [SDLK_LCTRL] = "A",
+        [SDLK_LALT] = "B",
+        [SDLK_LSHIFT] = "Y",
+        [SDLK_SPACE] = "X",
+
+        [SDLK_TAB] = "L1",
+        [SDLK_PAGEUP] = "L2",
+        [SDLK_KP_DIVIDE] = "L3",
+
+        [SDLK_BACKSPACE] = "R1",
+        [SDLK_PAGEDOWN] = "R2",
+        [SDLK_KP_PERIOD] = "R3",
+
+        [SDLK_RETURN] = "START",
+        [SDLK_ESCAPE] = "SELECT",
+        [SDLK_HOME] = "POWER",
+       // [SDLK_PAUSE] = "LOCK",
 };

@@ -1,6 +1,7 @@
-TARGET ?= PicoDrive
+#TARGET ?= PicoDrive_rg350
+TARGET ?= picodrive.elf
 DEBUG ?= 0
-CFLAGS += -Wall -ggdb -ffunction-sections -fdata-sections
+CFLAGS += -Wall -ggdb -ffunction-sections -fdata-sections -std=gnu11
 CFLAGS += -I.
 ifeq "$(DEBUG)" "0"
 CFLAGS += -O2 -DNDEBUG
@@ -103,11 +104,12 @@ opk: all
 	picodrive/picodrive.dge \
 	picodrive/skin \
 	picodrive/picodrive.png \
+	picodrive/picodrive.man.txt \
 	picodrive/picodrive.opk \
 	-all-root -noappend -no-exports -no-xattrs
 
 OBJS += platform/opendingux/inputmap.o
-
+## picodrive/picodrive.opk
 # OpenDingux is a generic platform, really.
 PLATFORM := generic
 endif
@@ -127,6 +129,8 @@ OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
 OBJS += platform/libpicofe/plat_dummy.o
 OBJS += platform/libpicofe/gl.o
 OBJS += platform/libpicofe/gl_platform.o
+OBJS += platform/common/scaler.o
+
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "generic"
@@ -134,6 +138,7 @@ OBJS += platform/linux/emu.o platform/linux/blit.o # FIXME
 OBJS += platform/common/plat_sdl.o
 OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
 OBJS += platform/libpicofe/plat_dummy.o
+OBJS += platform/common/scaler.o
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "pandora"

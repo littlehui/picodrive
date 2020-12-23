@@ -66,7 +66,7 @@ static void draw_cd_leds(void)
 
 void pemu_finalize_frame(const char *fps, const char *notice)
 {
-	if (currentConfig.renderer != RT_16BIT && !(PicoIn.AHW & PAHW_32X)) {
+    if (currentConfig.renderer != RT_16BIT && !(PicoIn.AHW & PAHW_32X)) {
 		unsigned short *pd = (unsigned short *)g_screen_ptr + 8 * g_screen_ppitch;
 		unsigned char *ps = Pico.est.Draw2FB + 328*8 + 8;
 		unsigned short *pal = Pico.est.HighPal;
@@ -178,8 +178,15 @@ void emu_video_mode_change(int start_line, int line_count, int is_32cols)
 	// clear whole screen in all buffers
 	if (currentConfig.renderer != RT_16BIT && !(PicoIn.AHW & PAHW_32X))
 		memset32(Pico.est.Draw2FB, 0, (320+8) * (8+240+8) / 4);
-	else
-		memset32(g_screen_ptr, 0, g_screen_ppitch * g_screen_height * 2 / 4);
+	else {
+	    // littlehui modify
+        memset32(g_screen_ptr, 0, g_screen_ppitch * g_screen_height * 2 / 4);
+        plat_video_flip();
+        memset32(g_screen_ptr, 0, g_screen_ppitch * g_screen_height * 2 / 4);
+        plat_video_flip();
+
+        memset32(g_screen_ptr, 0, g_screen_ppitch * g_screen_height * 2 / 4);
+	}
 }
 
 void pemu_loop_prep(void)

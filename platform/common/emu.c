@@ -849,13 +849,18 @@ char *emu_get_save_fname(int load, int is_sram, int slot, int *time)
 		if (slot > 0 && slot < 10)
 			sprintf(ext, ".%i", slot);
 		strcat(ext, ext_main);
+        fprintf(stderr, "emu_get_save_fname: start return\n");
 
 		if (!load) {
 			romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
-			return saveFname;
+            fprintf(stderr, "emu_get_save_fname: start return no load %s\n", saveFname);
+
+            return saveFname;
 		}
 		else {
-			romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
+            fprintf(stderr, "emu_get_save_fname: start romfname_ext\n");
+
+            romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
 			if (try_ropen_file(saveFname, time))
 				return saveFname;
 
@@ -1102,6 +1107,7 @@ static void do_turbo(unsigned short *pad, int acts)
 
 static void run_events_ui(unsigned int which)
 {
+    //run game to emun
 	if (which & (PEV_STATE_LOAD|PEV_STATE_SAVE))
 	{
 		int do_it = 1;
@@ -1162,8 +1168,13 @@ static void run_events_ui(unsigned int which)
 	}
 	if (which & PEV_RESET)
 		emu_reset_game();
-	if (which & PEV_MENU)
-		engineState = PGS_Menu;
+
+    fprintf(stderr, "which is =-=========== %d PEV_MENU is -=======%d \n", which,PEV_MENU);
+
+    if (which & PEV_MENU) {
+        fprintf(stderr, "enter PEV_MENU which is =-=========== %d PEV_MENU is -=======%d \n", which,PEV_MENU);
+        engineState = PGS_Menu;
+    }
 }
 
 void emu_update_input(void)
@@ -1199,6 +1210,8 @@ void emu_update_input(void)
 	}
 
 	events &= ~prev_events;
+
+    fprintf(stderr, "events is =-=========== %d \n", events);
 
 	if (PicoIn.AHW == PAHW_PICO)
 		run_events_pico(events);
@@ -1368,6 +1381,7 @@ static void emu_loop_prep(void)
 
 void emu_loop(void)
 {
+    // emulation run loop
 	int frames_done, frames_shown;	/* actual frames for fps counter */
 	int target_frametime_x3;
 	unsigned int timestamp_x3 = 0;
@@ -1517,6 +1531,7 @@ void emu_loop(void)
 		timestamp_aim_x3 += target_frametime_x3;
 
 		if (!skip && !flip_after_sync)
+		    //littlehui modify
 			plat_video_flip();
 
 		/* frame limiter */

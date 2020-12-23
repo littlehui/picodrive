@@ -2,6 +2,12 @@
 # some elements originated from qemu configure
 set -e
 
+#RG350 gcw0
+TC="/opt/gcw0-toolchain"
+CROSS_COMPILE=mipsel-gcw0-linux-uclibc-
+CFLAGS="-I$TC/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include -I$TC/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include/SDL"
+LDFLAGS="--sysroot $TC/usr/mipsel-gcw0-linux-uclibc/sysroot"
+
 TMPC="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}.c"
 TMPO="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}.o"
 TMPB="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}"

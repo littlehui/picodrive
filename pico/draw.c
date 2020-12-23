@@ -31,6 +31,7 @@
 #include "pico_int.h"
 #define FORCE	// layer forcing via debug register?
 #include <SDL/SDL.h>
+#include "../platform/libpicofe/plat.h"
 
 extern SDL_Surface *plat_sdl_screen;
 extern int g_screen_width;
@@ -38,6 +39,10 @@ extern int g_screen_height;
 extern int g_screen_ppitch;
 extern int engineState;
 extern void plat_video_loop_prepare();
+
+extern int vout_mode_hw_scanline_vertical;
+extern struct plat_target plat_target;
+extern int hardwarex2Flag;
 
 int (*PicoScanBegin)(unsigned int num) = NULL;
 int (*PicoScanEnd)  (unsigned int num) = NULL;
@@ -1532,8 +1537,20 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
 
   PicoDrawUpdateHighPal();
 
-  g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
-  g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
+  //g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
+  //g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
+  //littlehui modify
+    if (hardwarex2Flag) {
+        g_screen_width = (Pico.video.reg[12] & 1) ? 640 : 512;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : 480;
+    } else {
+        g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
+    }
+/*    if (plat_target.vout_method == vout_mode_hw_scanline_vertical) {
+        g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
+    }*/
+
   g_screen_ppitch = g_screen_width;
 
   if ((plat_sdl_screen->w != g_screen_width || plat_sdl_screen->h != g_screen_height) && engineState == 2) {
@@ -1896,12 +1913,17 @@ void PicoDrawSetOutFormat(pdso_t which, int use_32x_line_mode)
 void PicoDrawSetOutBufMD(void *dest, int increment)
 {
   if (dest != NULL) {
-    DrawLineDestBase = dest;
+      //littlehui modify
+      //fprintf(stderr, "PicoDrawSetOutBufMD  dest != NULL increment %d,%d\n",dest, increment);
+      DrawLineDestBase = dest;
     DrawLineDestIncrement = increment;
     Pico.est.DrawLineDest = DrawLineDestBase + Pico.est.DrawScanline * increment;
   }
   else {
-    DrawLineDestBase = DefOutBuff;
+      //littlehui modify
+      //fprintf(stderr, "PicoDrawSetOutBufMD  dest == NULL \n");
+
+      DrawLineDestBase = DefOutBuff;
     DrawLineDestIncrement = 0;
     Pico.est.DrawLineDest = DefOutBuff;
   }
