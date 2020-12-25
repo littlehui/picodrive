@@ -210,8 +210,19 @@ void plat_video_flip(void)
             }
             PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
         } else if (plat_target.vout_method == vout_mode_auto_scanline) {
+            if (g_screen_width == 640 && g_screen_height == 448) {
+                //vertical
+                upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else if (g_screen_width == 512 && g_screen_height == 480) {
+                upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else {
+                upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            }
+            PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
+
+
             //width and high
-            if (g_screen_width == 640 && g_screen_height == 480) {
+/*            if (g_screen_width == 640 && g_screen_height == 480) {
                 upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
                 PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
             } else {
@@ -221,7 +232,9 @@ void plat_video_flip(void)
                     upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
                 }
                 PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
-            }
+            }*/
+
+
         }
 	}
 }

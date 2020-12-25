@@ -1543,7 +1543,9 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
   //littlehui modify
     if (hardwarex2Flag) {
         g_screen_width = (Pico.video.reg[12] & 1) ? 640 : 512;
-        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : plat_target.vout_method == vout_mode_hw2 ? 448 : 480;
+        //g_screen_height = (Pico.video.reg[1] & 8) ? 480 : plat_target.vout_method == vout_mode_hw2 ? 448 : 480;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : 448;
+
     } else {
         g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
         g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;

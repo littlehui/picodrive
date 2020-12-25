@@ -51,7 +51,7 @@ uint16_t hexcolor_to_rgb565(const uint32_t color)
 
 void upscale_inter_x2_scanline(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
+    uint16_t* Dst16 = (uint16_t*) dst;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
@@ -93,7 +93,7 @@ void upscale_inter_x2_scanline(uint32_t *dst, uint32_t *src, int width, int high
 
 void upscale_inter_x2_grid(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
+    uint16_t* Dst16 = (uint16_t*) dst;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
@@ -180,7 +180,7 @@ void upscale_inter_x2(uint32_t *dst, uint32_t *src, int width, int high) {
 
 void upscale_inter_x2_scanline_vertical(uint32_t *dst, uint32_t *src, int width, int high) {
     uint16_t* Src16 = (uint16_t*) src;
-    uint16_t* Dst16 = (uint16_t*) dst + (PICO_FULL_HEIGHT - high)/2;
+    uint16_t* Dst16 = (uint16_t*) dst;
     int interWidth = width >> 1;
     int interHigh = high >> 1;
     uint32_t BlockX, BlockY;
