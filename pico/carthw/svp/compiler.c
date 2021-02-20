@@ -6,8 +6,8 @@
  * See COPYING file in the top-level directory.
  */
 
-#include "../../pico_int.h"
-#include "../../../cpu/drc/cmn.h"
+#include <pico/pico_int.h>
+#include <cpu/drc/cmn.h>
 #include "compiler.h"
 
 // FIXME: asm has these hardcoded
@@ -39,7 +39,7 @@ void ssp_drc_end(void){}
 #endif
 
 #define COUNT_OP
-#include "../../../cpu/drc/emit_arm.c"
+#include <cpu/drc/emit_arm.c>
 
 // -----------------------------------------------------
 
@@ -693,9 +693,9 @@ static int tr_aop_ssp2arm(int op)
 /* spacial version of call for calling C needed on ios, since we use r9.. */
 static void emith_call_c_func(void *target)
 {
-	EOP_STMFD_SP(A_R7M|A_R9M);
+	EOP_STMFD_SP(M2(7,9));
 	emith_call(target);
-	EOP_LDMFD_SP(A_R7M|A_R9M);
+	EOP_LDMFD_SP(M2(7,9));
 }
 #else
 #define emith_call_c_func emith_call

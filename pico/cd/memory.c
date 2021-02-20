@@ -230,6 +230,13 @@ write_comm:
 
   pcd_sync_s68k(SekCyclesDone(), 0);
   Pico_mcd->s68k_regs[a] = d;
+  if (a == 0x03) {
+    // There are cases when master checks for successful switching of RAM to
+    // slave. This can produce race conditions where slave switches RAM back to
+    // master while master is delayed by interrupt before the check executes.
+    // Delay slave a bit to make sure master can check before slave changes.
+    SekCycleCntS68k += 24;
+  }
   if (Pico_mcd->m.s68k_poll_a == (a & ~1))
   {
     if (Pico_mcd->m.s68k_poll_cnt > POLL_LIMIT) {
@@ -248,7 +255,7 @@ u32 s68k_poll_detect(u32 a, u32 d)
     return d;
 
   cycles = SekCyclesDoneS68k();
-  if (!SekNotPolling && a == Pico_mcd->m.s68k_poll_a) {
+  if (!SekNotPollingS68k && a == Pico_mcd->m.s68k_poll_a) {
     u32 clkdiff = cycles - Pico_mcd->m.s68k_poll_clk;
     if (clkdiff <= POLL_CYCLES) {
       cnt = Pico_mcd->m.s68k_poll_cnt + 1;
@@ -1158,12 +1165,12 @@ PICO_INTERNAL void PicoMemSetupCD(void)
 #endif
 #ifdef EMU_F68K
   // s68k
-  PicoCpuFS68k.read_byte  = s68k_read8;
-  PicoCpuFS68k.read_word  = s68k_read16;
-  PicoCpuFS68k.read_long  = s68k_read32;
-  PicoCpuFS68k.write_byte = s68k_write8;
-  PicoCpuFS68k.write_word = s68k_write16;
-  PicoCpuFS68k.write_long = s68k_write32;
+  PicoCpuFS68k.read_byte  = (void *)s68k_read8;
+  PicoCpuFS68k.read_word  = (void *)s68k_read16;
+  PicoCpuFS68k.read_long  = (void *)s68k_read32;
+  PicoCpuFS68k.write_byte = (void *)s68k_write8;
+  PicoCpuFS68k.write_word = (void *)s68k_write16;
+  PicoCpuFS68k.write_long = (void *)s68k_write32;
 
   // setup FAME fetchmap
   {

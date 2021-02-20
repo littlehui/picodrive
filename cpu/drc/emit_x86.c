@@ -349,6 +349,15 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	} else	emith_or_r_r_r(d, s1, s2); \
 } while (0)
 
+#define emith_eor_r_r_r_lsr(d, s1, s2, lsrimm) do { \
+	if (lsrimm) { \
+		int tmp_ = rcache_get_tmp(); \
+		emith_lsr(tmp_, s2, lsrimm); \
+		emith_eor_r_r_r(d, s1, tmp_); \
+		rcache_free_tmp(tmp_); \
+	} else	emith_eor_r_r_r(d, s1, s2); \
+} while (0)
+
 // _r_r_shift
 #define emith_or_r_r_lsl(d, s, lslimm) \
 	emith_or_r_r_r_lsl(d, d, s, lslimm)
@@ -609,7 +618,7 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	t >>= count; \
 	if (d != s) \
 		emith_move_r_r(d, s); \
-	emith_and_r_imm(d, t); \
+	if (count) emith_and_r_imm(d, t); \
 } while (0)
 
 #define emith_clear_msb_c(cond, d, s, count) do { \
@@ -621,6 +630,8 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	emith_lsl(d, s, 32 - (bits)); \
 	emith_asr(d, d, 32 - (bits)); \
 } while (0)
+
+#define emith_uext_ptr(r)	/**/
 
 #define emith_setc(r) do { \
 	assert(is_abcdx(r)); \
@@ -731,7 +742,7 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	/* mov r <-> [ebp+#offs] */ \
 	if ((offs) == 0) { \
 		emith_deref_modrm(op, 0, r, rs); \
-	} else if (abs(offs) >= 0x80) { \
+	} else if ((s32)(offs) < -0x80 || (s32)(offs) >= 0x80) { \
 		emith_deref_modrm(op, 2, r, rs); \
 		EMIT(offs, u32); \
 	} else { \
@@ -913,8 +924,10 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 #define emith_call_cond(cond, ptr) \
 	emith_call(ptr)
 
-#define emith_call_reg(r) \
-	EMIT_OP_MODRM(0xff, 3, 2, r)
+#define emith_call_reg(r) do { \
+	EMIT_REX_IF(0, 0, r); \
+	EMIT_OP_MODRM(0xff, 3, 2, (r)&7); \
+} while (0)
 
 #define emith_call_ctx(offs) do { \
 	EMIT_OP_MODRM(0xff, 2, 2, CONTEXT_REG); \
@@ -932,8 +945,10 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	emith_deref_modrm(0x03, 0, r, xSP); /* add r, [xsp] */ \
 } while (0)
 
-#define emith_jump_reg(r) \
-	EMIT_OP_MODRM(0xff, 3, 4, r)
+#define emith_jump_reg(r) do { \
+	EMIT_REX_IF(0, 0, r); \
+	EMIT_OP_MODRM(0xff, 3, 4, (r)&7); \
+} while (0)
 
 #define emith_jump_ctx(offs) do { \
 	EMIT_OP_MODRM(0xff, 2, 4, CONTEXT_REG); \
@@ -952,6 +967,17 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	emith_pop(r_); \
 	emith_ret(); \
 } while (0)
+
+#define emith_abijump_reg(r) \
+	emith_jump_reg(r)
+#define emith_abijump_reg_c(cond, r) \
+	emith_abijump_reg(r)
+#define emith_abicall(target) \
+	emith_call(target)
+#define emith_abicall_cond(cond, target) \
+	emith_abicall(target)
+#define emith_abicall_reg(r) \
+	emith_call_reg(r)
 
 
 #define EMITH_JMP_START(cond) { \
@@ -1004,7 +1030,7 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	emith_move_r_imm(rd, imm); \
 } while (0)
 
-#define host_instructions_updated(base, end)	(void)(base),(void)(end)
+#define host_instructions_updated(base, end, force)	(void)(base),(void)(end)
 #define	emith_update_cache()	/**/
 
 // NB this MUST be <0x40000000 to avoid overflow in address calculations
@@ -1022,7 +1048,7 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 	if ((w) | xr_ | xx_ | xb_) \
 		EMIT_REX(w, xr_, xx_, xb_); \
 } while (0)
-
+ 
 #define EMIT_REX_IF(w, r, rm) \
 	EMIT_XREX_IF(w, r, rm, 0)
 
@@ -1073,7 +1099,7 @@ enum { xAX = 0, xCX, xDX, xBX, xSP, xBP, xSI, xDI,	// x86-64,i386 common
 #define PARAM_REGS	{ xCX, xDX, xR8, xR9 }
 #define	PRESERVED_REGS	{ xSI, xDI, xR12, xR13, xR14, xR15, xBX, xBP }
 #define TEMPORARY_REGS	{ xAX, xR10, xR11 }
-#define STATIC_SH2_REGS { SHR_SR,xBX , SHR_R(0),xR15 , SH2_R(1),xR14 }
+#define STATIC_SH2_REGS { SHR_SR,xBX , SHR_R(0),xR15 , SHR_R(1),xR14 }
 
 #define host_arg2reg(rd, arg) \
 	switch (arg) { \
@@ -1395,7 +1421,7 @@ static void emith_set_t_cond(int sr, int cond)
 
 static void emith_set_t(int sr, int val)
 {
-  if (val)
+  if (val) 
     emith_or_r_imm(sr, T);
   else
     emith_bic_r_imm(sr, T);

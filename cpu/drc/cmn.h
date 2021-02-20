@@ -41,3 +41,4 @@ static inline int count_bits(unsigned val)
        val = (val & 0x33333333) + ((val >> 2) & 0x33333333);
        return (((val + (val >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 }
+

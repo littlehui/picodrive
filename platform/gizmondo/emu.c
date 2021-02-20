@@ -8,9 +8,9 @@
 #include "kgsdk/Framework2D.h"
 #include "kgsdk/FrameworkAudio.h"
 #include "../common/emu.h"
-#include "../common/lprintf.h"
 #include "../common/arm_utils.h"
 #include "../common/config.h"
+#include "../libpicofe/lprintf.h"
 #include "emu.h"
 #include "menu.h"
 #include "giz.h"
@@ -294,7 +294,7 @@ void pemu_forced_frame(int no_scale, int do_emu)
 
 	PicoIn.opt &= ~0x10;
 	PicoIn.opt |= POPT_ACC_SPRITES;
-	if (!no_scale)
+	if (!no_scale && currentConfig.scaling)
 		PicoIn.opt |= POPT_EN_SOFTSCALE;
 	currentConfig.EmuOpt |= 0x80;
 

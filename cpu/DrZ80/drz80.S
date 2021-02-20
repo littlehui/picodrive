@@ -5,7 +5,7 @@
 
 ;@ For commercial use, separate licencing terms must be obtained.
 
-#include "../../pico/arm_features.h"
+#include <pico/arm_features.h>
 
       .data
       .align 4
@@ -7232,7 +7232,7 @@ opcode_DD_BE:
 
 
 opcode_DD_CB:
-;@Looks up the opcode on the opcodes_DD_CB table and then
+;@Looks up the opcode on the opcodes_DD_CB table and then 
 ;@moves the PC to the location of the subroutine
 	ldrsb r0,[z80pc],#1
 	ldr r1,[z80xx]
@@ -7276,7 +7276,7 @@ opcodes_DD_CB:
 	PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_CB_F6);PIC_BT(opcode_DD_NF2)
 	PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_NF2);PIC_BT(opcode_DD_CB_FE);PIC_BT(opcode_DD_NF2)
 
-;@RLC (IX+N)
+;@RLC (IX+N) 
 opcode_DD_CB_06:
 	stmfd sp!,{r0}		;@ save addr
 	readmem8

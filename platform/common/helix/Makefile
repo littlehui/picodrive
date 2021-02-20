@@ -40,3 +40,4 @@ $(SHLIB) : $(OBJS) $(LIBGCC)
 
 clean:
 	$(RM) -f $(OBJS)
+

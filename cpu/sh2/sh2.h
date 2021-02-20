@@ -1,14 +1,16 @@
 #ifndef __SH2_H__
 #define __SH2_H__
 
-#include "../../pico/pico_port.h"
+#include <pico/pico_types.h>
+#include <pico/pico_port.h>
 
 // registers - matches structure order
 typedef enum {
   SHR_R0 = 0, SHR_SP = 15,
   SHR_PC,  SHR_PPC, SHR_PR,   SHR_SR,
   SHR_GBR, SHR_VBR, SHR_MACH, SHR_MACL,
-  SH2_REGS // register set size
+  SH2_REGS, // register set size
+  SHR_T = 29, SHR_MEM = 30, SHR_TMP = 31, // drc specific pseudo regs
 } sh2_reg_e;
 #define	SHR_R(n)	(SHR_R0+(n))
 
@@ -48,7 +50,8 @@ typedef struct SH2_
 #define SH2_STATE_CPOLL (1 << 2)	// polling comm regs
 #define SH2_STATE_VPOLL (1 << 3)	// polling VDP
 #define SH2_STATE_RPOLL (1 << 4)	// polling address in SDRAM
-#define SH2_TIMER_RUN   (1 << 8)	// SOC WDT timer is running
+#define SH2_TIMER_RUN   (1 << 7)	// SOC WDT timer is running
+#define SH2_IN_DRC      (1 << 8)	// DRC in use
 	unsigned int	state;
 	uint32_t	poll_addr;
 	int		poll_cycles;
@@ -106,7 +109,11 @@ int  sh2_execute_interpreter(SH2 *sh2c, int cycles);
 
 static __inline void sh2_execute_prepare(SH2 *sh2, int use_drc)
 {
+#ifdef DRC_SH2
   sh2->run = use_drc ? sh2_execute_drc : sh2_execute_interpreter;
+#else
+  sh2->run = sh2_execute_interpreter;
+#endif
 }
 
 static __inline int sh2_execute(SH2 *sh2, int cycles)
@@ -124,12 +131,12 @@ static __inline int sh2_execute(SH2 *sh2, int cycles)
 
 // pico memhandlers
 // XXX: move somewhere else
-unsigned int REGPARM(2) p32x_sh2_read8(unsigned int a, SH2 *sh2);
-unsigned int REGPARM(2) p32x_sh2_read16(unsigned int a, SH2 *sh2);
-unsigned int REGPARM(2) p32x_sh2_read32(unsigned int a, SH2 *sh2);
-void REGPARM(3) p32x_sh2_write8 (unsigned int a, unsigned int d, SH2 *sh2);
-void REGPARM(3) p32x_sh2_write16(unsigned int a, unsigned int d, SH2 *sh2);
-void REGPARM(3) p32x_sh2_write32(unsigned int a, unsigned int d, SH2 *sh2);
+u32 REGPARM(2) p32x_sh2_read8(u32 a, SH2 *sh2);
+u32 REGPARM(2) p32x_sh2_read16(u32 a, SH2 *sh2);
+u32 REGPARM(2) p32x_sh2_read32(u32 a, SH2 *sh2);
+void REGPARM(3) p32x_sh2_write8 (u32 a, u32 d, SH2 *sh2);
+void REGPARM(3) p32x_sh2_write16(u32 a, u32 d, SH2 *sh2);
+void REGPARM(3) p32x_sh2_write32(u32 a, u32 d, SH2 *sh2);
 
 // debug
 #ifdef DRC_CMP

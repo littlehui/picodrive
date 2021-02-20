@@ -1,3 +1,7 @@
+/*
+ * DRC host disassembler interface for MIPS/ARM32 for use without binutils
+ * (C) kub, 2018,2019
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -46,7 +50,7 @@ void host_dasm(void *addr, int len)
 
     insn = *(unsigned long *)addr;
     printf("   %08lx %08lx ", (long)addr, insn);
-    if(disasm((unsigned)addr, insn, buf, sizeof(buf), &symaddr))
+    if(disasm((uintptr_t)addr, insn, buf, sizeof(buf), &symaddr))
     {
       if (symaddr)
         name = lookup_name((void *)symaddr);
@@ -86,3 +90,4 @@ void host_dasm_new_symbol_(void *addr, const char *name)
   sym->name = name;
   symcount++;
 }
+

@@ -244,6 +244,8 @@ enum { F2_ALT=0x20, F2_MULDIV=0x01 };
 } while (0)
 #endif
 
+#define PTR_SIZE	(1<<PTR_SCALE)
+
 #define R5_ADDW_REG(rd, rs, rt)		(R5_ADD_REG(rd, rs, rt)^R5_OP32)
 #define R5_SUBW_REG(rd, rs, rt)		(R5_SUB_REG(rd, rs, rt)^R5_OP32)
 #define R5_LSLW_REG(rd, rs, rt)		(R5_LSL_REG(rd, rs, rt)^R5_OP32)
@@ -333,7 +335,7 @@ enum { F2_ALT=0x20, F2_MULDIV=0x01 };
 // the FV register stores information for V flag calculation (used for
 // GT,GE,LT,LE,VC,VS). V flag is costly and only fully calculated when needed.
 // the core registers may be temp registers, since the condition after calls
-// is undefined anyway.
+// is undefined anyway. 
 
 // flag emulation creates 2 (ie cmp #0/beq) up to 9 (ie adcf/ble) extra insns.
 // flag handling shortcuts may reduce this by 1-4 insns, see emith_cond_check()
@@ -358,7 +360,7 @@ static void emith_set_arith_flags(int rd, int rs, int rt, s32 imm, int sub)
 	if (emith_flg_hint & _FHC) {
 		if (sub)			// C = sub:rt<rd, add:rd<rt
 			EMIT(R5_SLTU_REG(FC, rs, FNZ));
-		else	EMIT(R5_SLTU_REG(FC, FNZ, rs));// C in FC, bit 0
+		else	EMIT(R5_SLTU_REG(FC, FNZ, rs));// C in FC, bit 0 
 	}
 
 	if (emith_flg_hint & _FHV) {
@@ -1021,7 +1023,7 @@ static void emith_ld_offs(int sz, int rd, int rs, int o12)
 	emith_ld_offs(F1_W, r, rs, offs)
 #define emith_read_r_r_offs_c(cond, r, rs, offs) \
 	emith_read_r_r_offs(r, rs, offs)
-
+ 
 #define emith_read_r_r_r_ptr(r, rs, rm) do { \
 	emith_add_r_r_r(AT, rs, rm); \
 	emith_ld_offs(F1_P, r, AT, 0); \
@@ -1144,22 +1146,22 @@ static void emith_st_offs(int sz, int rt, int rs, int o12)
 
 // function call handling
 #define emith_save_caller_regs(mask) do { \
-	int _c; u32 _m = mask & 0x3fce0; /* x5-x7,x10-x17 */ \
+	int _c, _z = PTR_SIZE; u32 _m = mask & 0x3fce0; /* x5-x7,x10-x17 */ \
 	_c = count_bits(_m)&3; _m |= (1<<((4-_c)&3))-1; /* ABI align */ \
-	int _s = count_bits(_m) * 4, _o = _s; \
+	int _s = count_bits(_m) * _z, _o = _s; \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, -_s); \
 	for (_c = HOST_REGS-1; _m && _c >= 0; _m &= ~(1 << _c), _c--) \
 		if (_m & (1 << _c)) \
-			{ _o -= 4; if (_c) emith_write_r_r_offs(_c, SP, _o); } \
+			{ _o -= _z; if (_c) emith_write_r_r_offs_ptr(_c, SP, _o); } \
 } while (0)
 
 #define emith_restore_caller_regs(mask) do { \
-	int _c; u32 _m = mask & 0x3fce0; \
+	int _c, _z =  PTR_SIZE; u32 _m = mask & 0x3fce0; \
 	_c = count_bits(_m)&3; _m |= (1<<((4-_c)&3))-1; /* ABI align */ \
-	int _s = count_bits(_m) * 4, _o = 0; \
+	int _s = count_bits(_m) * _z, _o = 0; \
 	for (_c = 0; _m && _c < HOST_REGS; _m &= ~(1 << _c), _c++) \
 		if (_m & (1 << _c)) \
-			{ if (_c) emith_read_r_r_offs(_c, SP, _o); _o += 4; } \
+			{ if (_c) emith_read_r_r_offs_ptr(_c, SP, _o); _o += _z; } \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, _s); \
 } while (0)
 
@@ -1312,6 +1314,7 @@ static int emith_cond_check(int cond, int *r, int *s)
 // NB: returns position of patch for cache maintenance
 #define emith_jump_patch(ptr, target, pos) do { \
 	u32 *ptr_ = (u32 *)ptr; /* must skip condition check code */ \
+	while ((*ptr_&0x77) != OP_BCOND && (*ptr_&0x77) != OP_LUI) ptr_ ++; \
 	if ((*ptr_&0x77) == OP_BCOND) { \
 		u32 *p_ = ptr_, disp_ = (u8 *)target - (u8 *)ptr_; \
 		u32 f1_ = _CB(*ptr_,3,12,0); \
@@ -1367,6 +1370,17 @@ static int emith_cond_check(int cond, int *r, int *s)
 	emith_call_reg(AT); \
 } while (0)
 
+#define emith_abijump_reg(r) \
+	emith_jump_reg(r)
+#define emith_abijump_reg_c(cond, r) \
+	emith_abijump_reg(r)
+#define emith_abicall(target) \
+	emith_call(target)
+#define emith_abicall_cond(cond, target) \
+	emith_abicall(target)
+#define emith_abicall_reg(r) \
+	emith_call_reg(r)
+
 #define emith_call_cleanup()	/**/
 
 #define emith_ret() \
@@ -1382,13 +1396,13 @@ static int emith_cond_check(int cond, int *r, int *s)
 
 #define emith_push_ret(r) do { \
 	emith_add_r_r_ptr_imm(SP, SP, -16); /* ABI requires 16 byte aligment */\
-	emith_write_r_r_offs(LR, SP, 4); \
+	emith_write_r_r_offs_ptr(LR, SP, 8); \
 	if ((r) > 0) emith_write_r_r_offs(r, SP, 0); \
 } while (0)
 
 #define emith_pop_and_ret(r) do { \
 	if ((r) > 0) emith_read_r_r_offs(r, SP, 0); \
-	emith_read_r_r_offs(LR, SP, 4); \
+	emith_read_r_r_offs_ptr(LR, SP, 8); \
 	emith_add_r_r_ptr_imm(SP, SP, 16); \
 	emith_ret(); \
 } while (0)
@@ -1397,27 +1411,28 @@ static int emith_cond_check(int cond, int *r, int *s)
 // emitter ABI stuff
 #define emith_insn_ptr()	((u8 *)tcache_ptr)
 #define	emith_flush()		/**/
-#define host_instructions_updated(base, end) __builtin___clear_cache(base, end)
+#define host_instructions_updated(base, end, force) __builtin___clear_cache(base, end)
 #define	emith_update_cache()	/**/
 #define emith_rw_offs_max()	0x7ff
+#define emith_uext_ptr(r)	/**/
 
 // SH2 drc specific
 #define emith_sh2_drc_entry() do { \
-	int _c; u32 _m = 0x0ffc0202; /* x1,x9,x18-x27 */ \
+	int _c, _z = PTR_SIZE; u32 _m = 0x0ffc0202; /* x1,x9,x18-x27 */ \
 	_c = count_bits(_m)&3; _m |= (1<<((4-_c)&3))-1; /* ABI align */ \
-	int _s = count_bits(_m) * 4, _o = _s; \
+	int _s = count_bits(_m) * _z, _o = _s; \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, -_s); \
 	for (_c = HOST_REGS-1; _m && _c >= 0; _m &= ~(1 << _c), _c--) \
 		if (_m & (1 << _c)) \
-			{ _o -= 4; if (_c) emith_write_r_r_offs(_c, SP, _o); } \
+			{ _o -= _z; if (_c) emith_write_r_r_offs_ptr(_c, SP, _o); } \
 } while (0)
 #define emith_sh2_drc_exit() do { \
-	int _c; u32 _m = 0x0ffc0202; \
+	int _c, _z = PTR_SIZE; u32 _m = 0x0ffc0202; \
 	_c = count_bits(_m)&3; _m |= (1<<((4-_c)&3))-1; /* ABI align */ \
-	int _s = count_bits(_m) * 4, _o = 0; \
+	int _s = count_bits(_m) * _z, _o = 0; \
 	for (_c = 0; _m && _c < HOST_REGS; _m &= ~(1 << _c), _c++) \
 		if (_m & (1 << _c)) \
-			{ if (_c) emith_read_r_r_offs(_c, SP, _o); _o += 4; } \
+			{ if (_c) emith_read_r_r_offs_ptr(_c, SP, _o); _o += _z; } \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, _s); \
 	emith_ret(); \
 } while (0)
@@ -1427,7 +1442,7 @@ static int emith_cond_check(int cond, int *r, int *s)
 	emith_lsr(mask, a, SH2_READ_SHIFT); \
 	emith_add_r_r_r_lsl_ptr(tab, tab, mask, PTR_SCALE+1); \
 	emith_read_r_r_offs_ptr(func, tab, 0); \
-	emith_read_r_r_offs(mask, tab, 1 << PTR_SCALE); \
+	emith_read_r_r_offs(mask, tab, PTR_SIZE); \
 	emith_addf_r_r_r_ptr(func, func, func); \
 } while (0)
 
@@ -1597,28 +1612,21 @@ static void emith_set_t_cond(int sr, int cond)
   u32 val = 0, inv = 0;
 
   // try to avoid jumping around if possible
-  if (emith_cmp_rs >= 0) {
-    if (emith_cmp_rt >= 0)
-      b = emith_cmpr_check(emith_cmp_rs, emith_cmp_rt,  cond, &r, &s);
-    else
-      b = emith_cmpi_check(emith_cmp_rs, emith_cmp_imm, cond, &r, &s);
-  } else {
-    b = emith_cond_check(cond, &r, &s);
-    if (r == Z0) {
-      if (b == F1_BEQ || b == F1_BGE || b == F1_BGEU)
-        emith_or_r_imm(sr, T);
-      return;
-    } else if (r == FC)
-      val++, inv = (b == F1_BEQ);
-  }
+  b = emith_cond_check(cond, &r, &s);
+  if (r == Z0) {
+    if (b == F1_BEQ || b == F1_BGE || b == F1_BGEU)
+      emith_or_r_imm(sr, T);
+    return;
+  } else if (r == FC)
+    val++, inv = (b == F1_BEQ);
 
   if (!val) switch (b) {
   case F1_BEQ:  if (s == Z0) { EMIT(R5_SLTU_IMM(AT,r ,1)); r=AT; val++; break; }
                 EMIT(R5_XOR_REG(AT, r, s));
                 EMIT(R5_SLTU_IMM(AT,AT, 1)); r=AT; val++; break;
-  case F1_BNE:  if (s == Z0) { EMIT(R5_SLTU_IMM(AT,Z0,r)); r=AT; val++; break; }
+  case F1_BNE:  if (s == Z0) { EMIT(R5_SLTU_REG(AT,Z0,r)); r=AT; val++; break; }
                 EMIT(R5_XOR_REG(AT, r, s));
-                EMIT(R5_SLTU_IMM(AT,Z0,AT)); r=AT; val++; break;
+                EMIT(R5_SLTU_REG(AT,Z0,AT)); r=AT; val++; break;
   case F1_BLTU: EMIT(R5_SLTU_REG(AT, r, s)); r=AT; val++; break;
   case F1_BGEU: EMIT(R5_SLTU_REG(AT, r, s)); r=AT; val++; inv++; break;
   case F1_BLT:  EMIT(R5_SLT_REG(AT, r, s)); r=AT; val++; break;
@@ -1648,7 +1656,7 @@ static void emith_set_t_cond(int sr, int cond)
 
 static void emith_set_t(int sr, int val)
 {
-  if (val)
+  if (val) 
     emith_or_r_imm(sr, T);
   else
     emith_bic_r_imm(sr, T);

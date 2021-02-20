@@ -18,6 +18,10 @@
 #include "../libpicofe/lprintf.h"
 #include "config_file.h"
 
+#ifdef USE_LIBRETRO_VFS
+#include "file_stream_transforms.h"
+#endif
+
 static char *mystrip(char *str);
 
 #ifndef _MSC_VER
@@ -120,13 +124,15 @@ int config_write(const char *fname)
 			const char **names = (const char **)me->data;
 			for (t = 0; names[t] != NULL; t++) {
 				if (*(int *)me->var == t) {
-					strncpy(line, names[t], sizeof(line));
+					strncpy(line, names[t], sizeof(line)-1);
+					line[sizeof(line)-1] = '\0';
 					goto write_line;
 				}
 			}
 		}
 		else if (me->generate_name != NULL) {
-			strncpy(line, me->generate_name(0, &dummy), sizeof(line));
+			strncpy(line, me->generate_name(me->id, &dummy), sizeof(line)-1);
+			line[sizeof(line)-1] = '\0';
 			goto write_line;
 		}
 		else
@@ -234,9 +240,9 @@ int config_readlrom(const char *fname)
 		tmp++;
 		mystrip(tmp);
 
-		len = sizeof(rom_fname_loaded);
+		len = sizeof(rom_fname_loaded)-1;
 		strncpy(rom_fname_loaded, tmp, len);
-		rom_fname_loaded[len-1] = 0;
+		rom_fname_loaded[len] = 0;
 		ret = 0;
 		break;
 	}
@@ -395,7 +401,7 @@ static int parse_bind_val(const char *val, int *type)
 
 static void keys_parse_all(FILE *f)
 {
-	char line[256], *var, *val;
+	char line[640], *var, *val;
 	int dev_id = -1;
 	int acts, type;
 	int ret;
@@ -427,6 +433,7 @@ static void keys_parse_all(FILE *f)
 		mystrip(var + 5);
 		in_config_bind_key(dev_id, var + 5, acts, type);
 	}
+	in_clean_binds();
 }
 
 static void parse(const char *var, const char *val, int *keys_encountered)

@@ -13,7 +13,6 @@
 #ifdef __GP2X__
 #include <unistd.h>
 #endif
-#include <libgen.h> // for dirname
 
 #include "../libpicofe/posix.h"
 #include "../libpicofe/input.h"
@@ -28,6 +27,10 @@
 
 #include <pico/pico_int.h>
 #include <pico/patch.h>
+
+#ifdef USE_LIBRETRO_VFS
+#include "file_stream_transforms.h"
+#endif
 
 #if defined(__GNUC__) && __GNUC__ >= 7
 #pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -48,7 +51,6 @@ void *g_screen_ptr;
 int g_screen_width  = 320;
 int g_screen_height = 240;
 int g_screen_ppitch = 320; // pitch in pixels
-int heigh_need_fill = 0;
 
 const char *PicoConfigFile = "config2.cfg";
 currentConfig_t currentConfig, defaultConfig;
@@ -129,8 +131,8 @@ static void fname_ext(char *dst, int dstlen, const char *prefix, const char *ext
 	strncpy(dst + prefix_len, p, dstlen - prefix_len - 1);
 
 	dst[dstlen - 8] = 0;
-	if (dst[strlen(dst) - 4] == '.')
-		dst[strlen(dst) - 4] = 0;
+	if ((p = strrchr(dst, '.')) != NULL)
+		dst[p-dst] = 0;
 	if (ext)
 		strcat(dst, ext);
 }
@@ -199,17 +201,6 @@ static const char *find_bios(int *region, const char *cd_fname)
 
 	for (i = 0; i < count; i++)
 	{
-		sprintf(static_buff, "%s", rom_fname_reload);
-		dirname(static_buff); // same dir as game
-		sprintf(static_buff, "%s/%s.bin", static_buff, files[i]);
-		f = fopen(static_buff, "rb");
-		if (f) break;
-
-		dirname(static_buff); // dir up from the game
-		sprintf(static_buff, "%s/%s.bin", static_buff, files[i]);
-		f = fopen(static_buff, "rb");
-		if (f) break;
-
 		emu_make_path(static_buff, files[i], sizeof(static_buff) - 4);
 		strcat(static_buff, ".bin");
 		f = fopen(static_buff, "rb");
@@ -594,11 +585,11 @@ static void make_config_cfg(char *cfg_buff_512)
 void emu_prep_defconfig(void)
 {
 	memset(&defaultConfig, 0, sizeof(defaultConfig));
-	defaultConfig.EmuOpt    = 0x9d & ~EOPT_EN_CD_LEDS;
+	defaultConfig.EmuOpt    = 0x9d | EOPT_EN_CD_LEDS;
 	defaultConfig.s_PicoOpt = POPT_EN_STEREO|POPT_EN_FM|POPT_EN_PSG|POPT_EN_Z80 |
 				  POPT_EN_MCD_PCM|POPT_EN_MCD_CDDA|POPT_EN_MCD_GFX |
 				  POPT_EN_DRC|POPT_ACC_SPRITES |
-				  POPT_EN_32X|POPT_EN_PWM | POPT_DIS_IDLE_DET;
+				  POPT_EN_32X|POPT_EN_PWM;
 	defaultConfig.s_PsndRate = 44100;
 	defaultConfig.s_PicoRegion = 0; // auto
 	defaultConfig.s_PicoAutoRgnOrder = 0x184; // US, EU, JP
@@ -850,18 +841,13 @@ char *emu_get_save_fname(int load, int is_sram, int slot, int *time)
 		if (slot > 0 && slot < 10)
 			sprintf(ext, ".%i", slot);
 		strcat(ext, ext_main);
-        fprintf(stderr, "emu_get_save_fname: start return\n");
 
 		if (!load) {
 			romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
-            fprintf(stderr, "emu_get_save_fname: start return no load %s\n", saveFname);
-
-            return saveFname;
+			return saveFname;
 		}
 		else {
-            fprintf(stderr, "emu_get_save_fname: start romfname_ext\n");
-
-            romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
+			romfname_ext(saveFname, sizeof(static_buff), "mds" PATH_SEP, ext);
 			if (try_ropen_file(saveFname, time))
 				return saveFname;
 
@@ -1108,7 +1094,6 @@ static void do_turbo(unsigned short *pad, int acts)
 
 static void run_events_ui(unsigned int which)
 {
-    //run game to emun
 	if (which & (PEV_STATE_LOAD|PEV_STATE_SAVE))
 	{
 		int do_it = 1;
@@ -1140,6 +1125,7 @@ static void run_events_ui(unsigned int which)
 			while (in_menu_wait_any(NULL, 50) & (PBTN_MOK | PBTN_MBACK))
 				;
 			in_set_config_int(0, IN_CFG_BLOCKING, 0);
+			plat_status_msg_clear();
 		}
 		if (do_it) {
 			plat_status_msg_busy_first((which & PEV_STATE_LOAD) ? "LOADING STATE" : "SAVING STATE");
@@ -1169,13 +1155,8 @@ static void run_events_ui(unsigned int which)
 	}
 	if (which & PEV_RESET)
 		emu_reset_game();
-
-    fprintf(stderr, "which is =-=========== %d PEV_MENU is -=======%d \n", which,PEV_MENU);
-
-    if (which & PEV_MENU) {
-        fprintf(stderr, "enter PEV_MENU which is =-=========== %d PEV_MENU is -=======%d \n", which,PEV_MENU);
-        engineState = PGS_Menu;
-    }
+	if (which & PEV_MENU)
+		engineState = PGS_Menu;
 }
 
 void emu_update_input(void)
@@ -1231,7 +1212,7 @@ static void mkdir_path(char *path_with_reserve, int pos, const char *name)
 		lprintf("failed to create: %s\n", path_with_reserve);
 }
 
-void emu_cmn_forced_frame(int no_scale, int do_emu)
+void emu_cmn_forced_frame(int no_scale, int do_emu, void *buf)
 {
 	int po_old = PicoIn.opt;
 	int y;
@@ -1242,11 +1223,13 @@ void emu_cmn_forced_frame(int no_scale, int do_emu)
 
 	PicoIn.opt &= ~POPT_ALT_RENDERER;
 	PicoIn.opt |= POPT_ACC_SPRITES;
-	if (!no_scale)
+	if (!no_scale && currentConfig.scaling)
 		PicoIn.opt |= POPT_EN_SOFTSCALE;
 
 	PicoDrawSetOutFormat(PDF_RGB555, 1);
+	PicoDrawSetOutBuf(buf, g_screen_ppitch * 2);
 	Pico.m.dirtyPal = 1;
+	Pico.est.rendstatus |= PDRAW_DIRTY_SPRITES;
 	if (do_emu)
 		PicoFrame();
 	else
@@ -1380,7 +1363,6 @@ static void emu_loop_prep(void)
 
 void emu_loop(void)
 {
-    // emulation run loop
 	int frames_done, frames_shown;	/* actual frames for fps counter */
 	int target_frametime_x3;
 	unsigned int timestamp_x3 = 0;
@@ -1436,21 +1418,13 @@ void emu_loop(void)
 			     > ms_to_ticks(STATUS_MSG_TIMEOUT) * 3)
 			{
 				notice_msg_time = 0;
-				plat_status_msg_clear();
-				plat_video_flip();
-				plat_status_msg_clear(); /* Do it again in case of double buffering */
-				plat_video_flip();
-				plat_status_msg_clear(); /* Do it again in case of triple buffering */
 				notice_msg = NULL;
+				plat_status_msg_clear();
 			}
 			else {
 				int sum = noticeMsg[0] + noticeMsg[1] + noticeMsg[2];
 				if (sum != noticeMsgSum) {
 					plat_status_msg_clear();
-					plat_video_flip();
-					plat_status_msg_clear(); /* Do it again in case of double buffering */
-					plat_video_flip();
-					plat_status_msg_clear(); /* Do it again in case of triple buffering */
 					noticeMsgSum = sum;
 				}
 				notice_msg = noticeMsg;
@@ -1530,7 +1504,6 @@ void emu_loop(void)
 		timestamp_aim_x3 += target_frametime_x3;
 
 		if (!skip && !flip_after_sync)
-		    //littlehui modify
 			plat_video_flip();
 
 		/* frame limiter */

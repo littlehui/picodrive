@@ -1,22 +1,9 @@
-#TARGET ?= PicoDrive_rg350
-TARGET ?= picodrive.elf
+$(LD) ?= $(CC)
+TARGET ?= PicoDrive
 DEBUG ?= 0
-CFLAGS += -Wall -ggdb -ffunction-sections -fdata-sections -std=gnu11
-CFLAGS += -I.
-ifeq "$(DEBUG)" "0"
-CFLAGS += -O2 -DNDEBUG
-endif
-
-# This is actually needed, believe me.
-# If you really have to disable this, set NO_ALIGN_FUNCTIONS elsewhere.
-ifndef NO_ALIGN_FUNCTIONS
-CFLAGS += -falign-functions=2
-endif
-LDFLAGS += -Wl,--gc-sections
-
-# profiling
-pprof ?= 0
-gperf ?= 0
+CFLAGS += -I$(PWD)
+CYCLONE_CC ?= gcc
+CYCLONE_CXX ?= g++
 
 all: config.mak target_
 
@@ -35,13 +22,39 @@ else # NO_CONFIG_MAK
 config.mak:
 endif
 
+# This is actually needed, believe me.
+# If you really have to disable this, set NO_ALIGN_FUNCTIONS elsewhere.
+ifndef NO_ALIGN_FUNCTIONS
+CFLAGS += -falign-functions=2
+endif
+
+# profiling
+pprof ?= 0
+gperf ?= 0
+
+ifneq ("$(PLATFORM)", "libretro")
+	CFLAGS += -Wall -g
+ifneq ("$(PLATFORM)", "psp")
+ifneq ($(findstring gcc,$(shell $(CC) -v 2>&1)),)
+	CFLAGS += -ffunction-sections -fdata-sections
+	LDFLAGS += -Wl,--gc-sections
+endif
+endif
+
+ifeq "$(DEBUG)" "0"
+	CFLAGS += -O3 -DNDEBUG
+endif
+	LD = $(CC)
+	OBJOUT ?= -o
+	LINKOUT ?= -o
+endif
+
 ifeq ("$(PLATFORM)",$(filter "$(PLATFORM)","gp2x" "opendingux" "rpi1"))
 # very small caches, avoid optimization options making the binary much bigger
 CFLAGS += -finline-limit=42 -fno-unroll-loops -fno-ipa-cp -ffast-math
 # this gets you about 20% better execution speed on 32bit arm/mips
 CFLAGS += -fno-common -fno-stack-protector -fno-guess-branch-probability -fno-caller-saves -fno-tree-loop-if-convert -fno-regmove
 endif
-#OBJS += align.o
 
 # default settings
 ifeq "$(ARCH)" "arm"
@@ -58,58 +71,35 @@ asm_cdmemory ?= 1
 asm_mix ?= 1
 asm_32xdraw ?= 1
 asm_32xmemory ?= 1
-else ifneq (,$(findstring 86,$(ARCH)))
+else
 use_fame ?= 1
 use_cz80 ?= 1
+ifneq (,$(filter x86% i386% mips% aarch% riscv% powerpc% ppc%, $(ARCH)))
 use_sh2drc ?= 1
-else ifneq (,$(findstring mips,$(ARCH)))
-use_fame ?= 1
-use_cz80 ?= 1
-use_sh2drc ?= 1
-else ifneq (,$(findstring aarch64,$(ARCH)))
-use_fame ?= 1
-use_cz80 ?= 1
-use_sh2drc ?= 1
-else ifneq (,$(findstring riscv,$(ARCH)))
-use_fame ?= 1
-use_cz80 ?= 1
-use_sh2drc ?= 1
+endif
 endif
 
 -include Makefile.local
 
 ifeq "$(PLATFORM)" "opendingux"
+opk: $(TARGET).opk
 
-ipk: all
-	@rm -rf /tmp/.picodrive-ipk/ && mkdir -p /tmp/.picodrive-ipk/root/home/retrofw/emus/picodrive /tmp/.picodrive-ipk/root/home/retrofw/apps/gmenu2x/sections/emulators /tmp/.picodrive-ipk/root/home/retrofw/apps/gmenu2x/sections/emulators.systems
-	@cp -r picodrive/skin picodrive/picodrive.dge picodrive/picodrive.png /tmp/.picodrive-ipk/root/home/retrofw/emus/picodrive
-	@cp picodrive/picodrive.lnk /tmp/.picodrive-ipk/root/home/retrofw/apps/gmenu2x/sections/emulators
-	@cp picodrive/megadrive.picodrive.lnk picodrive/segacd.picodrive.lnk picodrive/gamegear.picodrive.lnk picodrive/mastersystem.picodrive.lnk /tmp/.picodrive-ipk/root/home/retrofw/apps/gmenu2x/sections/emulators.systems
-	@sed "s/^Version:.*/Version: $$(date +%Y%m%d)/" picodrive/control > /tmp/.picodrive-ipk/control
-	@cp picodrive/conffiles /tmp/.picodrive-ipk/
-	@tar --owner=0 --group=0 -czvf /tmp/.picodrive-ipk/control.tar.gz -C /tmp/.picodrive-ipk/ control conffiles
-	@tar --owner=0 --group=0 -czvf /tmp/.picodrive-ipk/data.tar.gz -C /tmp/.picodrive-ipk/root/ .
-	@echo 2.0 > /tmp/.picodrive-ipk/debian-binary
-	@ar r picodrive/picodrive.ipk /tmp/.picodrive-ipk/control.tar.gz /tmp/.picodrive-ipk/data.tar.gz /tmp/.picodrive-ipk/debian-binary
+$(TARGET).opk: $(TARGET)
+	$(RM) -rf .opk_data
+	cp -r platform/opendingux/data .opk_data
+	cp $< .opk_data/PicoDrive
+	$(STRIP) .opk_data/PicoDrive
+	mksquashfs .opk_data $@ -all-root -noappend -no-exports -no-xattrs
 
-opk: all
-	@touch picodrive/picodrive.elf picodrive/picodrive.dge
-	@mksquashfs \
-	picodrive/default.gcw0.desktop \
-	picodrive/default.retrofw.desktop \
-	picodrive/megadrive.retrofw.desktop \
-	picodrive/segacd.retrofw.desktop \
-	picodrive/32x.retrofw.desktop \
-	picodrive/picodrive.elf \
-	picodrive/picodrive.dge \
-	picodrive/skin \
-	picodrive/picodrive.png \
-	picodrive/picodrive.man.txt \
-	picodrive/picodrive.opk \
-	-all-root -noappend -no-exports -no-xattrs
+all: opk
 
 OBJS += platform/opendingux/inputmap.o
-## picodrive/picodrive.opk
+
+ifneq (,$(filter %__GCW0__ %__RG350__, $(CFLAGS)))
+CFLAGS += -DMIPS_USE_SYNCI # clear_cache uses SYNCI instead of a syscall
+endif
+
+use_inputmap ?= 1
 # OpenDingux is a generic platform, really.
 PLATFORM := generic
 endif
@@ -121,24 +111,26 @@ LDFLAGS += -ldl -lbcm_host -L/opt/vc/lib
 ifneq (,$(wildcard /opt/vc/lib/libbrcmGLESv2.so))
 LDFLAGS += -lbrcmEGL -lbrcmGLESv2
 else
-LDFLAGS += -lEGL -lGLESv2
+LDFLAGS += -lEGL -lGLESv2 # on raspi GLESv1_CM is included in GLESv2
 endif
 OBJS += platform/linux/emu.o platform/linux/blit.o # FIXME
-OBJS += platform/common/plat_sdl.o
+OBJS += platform/common/plat_sdl.o platform/common/input_sdlkbd.o
 OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
-OBJS += platform/libpicofe/plat_dummy.o
+OBJS += platform/libpicofe/plat_dummy.o platform/libpicofe/linux/plat.o
 OBJS += platform/libpicofe/gl.o
 OBJS += platform/libpicofe/gl_platform.o
-OBJS += platform/common/scaler.o
-
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "generic"
+CFLAGS += -DSDL_OVERLAY_2X -DSDL_BUFFER_3X
 OBJS += platform/linux/emu.o platform/linux/blit.o # FIXME
-OBJS += platform/common/plat_sdl.o
+ifeq "$(use_inputmap)" "1"
+OBJS += platform/common/plat_sdl.o platform/opendingux/inputmap.o
+else
+OBJS += platform/common/plat_sdl.o platform/common/inputmap_kbd.o
+endif
 OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
-OBJS += platform/libpicofe/plat_dummy.o
-OBJS += platform/common/scaler.o
+OBJS += platform/libpicofe/plat_dummy.o platform/libpicofe/linux/plat.o
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "pandora"
@@ -150,12 +142,14 @@ OBJS += platform/common/arm_utils.o
 OBJS += platform/libpicofe/linux/in_evdev.o
 OBJS += platform/libpicofe/linux/fbdev.o 
 OBJS += platform/libpicofe/linux/xenv.o
+OBJS += platform/libpicofe/linux/plat.o
 OBJS += platform/libpicofe/pandora/plat.o
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "gp2x"
 OBJS += platform/common/arm_utils.o 
 OBJS += platform/libpicofe/linux/in_evdev.o
+OBJS += platform/libpicofe/linux/plat.o
 OBJS += platform/libpicofe/gp2x/in_gp2x.o
 OBJS += platform/libpicofe/gp2x/soc.o 
 OBJS += platform/libpicofe/gp2x/soc_mmsp2.o 
@@ -171,11 +165,32 @@ OBJS += platform/gp2x/warm.o
 USE_FRONTEND = 1
 PLATFORM_MP3 = 1
 PLATFORM_ZLIB = 1
-HAVE_ARMv6 = 0
+endif
+ifeq "$(PLATFORM)" "psp"
+CFLAGS += -DUSE_BGR565 -G8 # -DLPRINTF_STDIO -DFW15
+LDLIBS += -lpspgu -lpspge -lpsppower -lpspaudio -lpspdisplay -lpspaudiocodec
+LDLIBS += -lpsprtc -lpspctrl -lpspsdk -lc -lpspnet_inet -lpspuser -lpspkernel
+platform/common/main.o: CFLAGS += -Dmain=pico_main
+OBJS += platform/psp/plat.o
+OBJS += platform/psp/emu.o
+OBJS += platform/psp/in_psp.o
+OBJS += platform/psp/psp.o
+OBJS += platform/psp/asm_utils.o
+OBJS += platform/psp/mp3.o
+USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "libretro"
 OBJS += platform/libretro/libretro.o
-PLATFORM_ZLIB = 1
+ifeq "$(USE_LIBRETRO_VFS)" "1"
+OBJS += platform/libretro/libretro-common/compat/compat_posix_string.o
+OBJS += platform/libretro/libretro-common/compat/compat_strl.o
+OBJS += platform/libretro/libretro-common/compat/fopen_utf8.o
+OBJS += platform/libretro/libretro-common/encodings/encoding_utf.o
+OBJS += platform/libretro/libretro-common/streams/file_stream.o
+OBJS += platform/libretro/libretro-common/streams/file_stream_transforms.o
+OBJS += platform/libretro/libretro-common/vfs/vfs_implementation.o
+endif
+PLATFORM_ZLIB ?= 1
 endif
 
 ifeq "$(USE_FRONTEND)" "1"
@@ -186,7 +201,7 @@ OBJS += platform/common/main.o platform/common/emu.o \
 
 # libpicofe
 OBJS += platform/libpicofe/input.o platform/libpicofe/readpng.o \
-	platform/libpicofe/fonts.o platform/libpicofe/linux/plat.o
+	platform/libpicofe/fonts.o
 
 # libpicofe - sound
 OBJS += platform/libpicofe/sndout.o
@@ -209,14 +224,15 @@ endif
 
 endif # USE_FRONTEND
 
+ifneq "$(PLATFORM)" "psp"
 OBJS += platform/common/mp3.o platform/common/mp3_sync.o
 ifeq "$(PLATFORM_MP3)" "1"
-platform/common/mp3_helix.o: CFLAGS += -Iplatform/libpicofe
 OBJS += platform/common/mp3_helix.o
 else ifeq "$(HAVE_LIBAVCODEC)" "1"
 OBJS += platform/common/mp3_libavcodec.o
 else
-OBJS += platform/common/mp3_dummy.o
+OBJS += platform/common/mp3_minimp3.o
+endif
 endif
 
 ifeq "$(PLATFORM_ZLIB)" "1"
@@ -234,29 +250,53 @@ include platform/common/common.mak
 OBJS += $(OBJS_COMMON)
 CFLAGS += $(addprefix -D,$(DEFINES))
 
-ifneq ($(findstring gcc,$(CC)),)
-LDFLAGS += -Wl,-Map=$(TARGET).map
+ifneq (,$(findstring sdl,$(OBJS)))
+CFLAGS += -DUSE_SDL
 endif
 
+ifneq ($(findstring gcc,$(CC)),)
+ifneq ($(findstring SunOS,$(shell uname -a)),SunOS)
+ifeq ($(findstring Darwin,$(shell uname -a)),Darwin)
+LDFLAGS += -Wl,-map,$(TARGET).map
+else
+LDFLAGS += -Wl,-Map=$(TARGET).map
+endif
+endif
+endif
 
-target_: pico/pico_int_offs.h $(TARGET)
+target_: $(TARGET)
 
 clean:
-	$(RM) $(TARGET) $(OBJS)
-	$(RM) -r .opk_data picodrive/picodrive.ipk picodrive/picodrive.opk
+	$(RM) $(TARGET) $(OBJS) pico/pico_int_offs.h
+	$(RM) -r .opk_data
 
 $(TARGET): $(OBJS)
+
 ifeq ($(STATIC_LINKING), 1)
 	$(AR) rcs $@ $^
 else
-	$(CC) -o $@ $(CFLAGS) $^ $(LDFLAGS) $(LDLIBS)
+	$(LD) $(LINKOUT)$@ $^ $(LDFLAGS) $(LDLIBS)
+endif
+
+ifeq "$(PLATFORM)" "psp"
+PSPSDK ?= $(shell psp-config --pspsdk-path)
+TARGET = PicoDrive
+PSP_EBOOT_TITLE = PicoDrive
+PSP_EBOOT_ICON = platform/psp/data/icon.png
+LIBS += -lpng -lm -lz -lpspgu -lpsppower -lpspaudio -lpsprtc -lpspaudiocodec
+EXTRA_TARGETS = EBOOT.PBP
+include $(PSPSDK)/lib/build.mak
+# TODO image generation
 endif
 
 pprof: platform/linux/pprof.c
 	$(CC) $(CFLAGS) -O2 -ggdb -DPPROF -DPPROF_TOOL -I../../ -I. $^ -o $@ $(LDFLAGS) $(LDLIBS)
 
 pico/pico_int_offs.h: tools/mkoffsets.sh
-	make -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS)"
+	make -C tools/ XCC="$(CC)" XCFLAGS="$(CFLAGS)" XPLATFORM="$(platform)"
+
+%.o: %.c
+	$(CC) -c $(OBJOUT)$@ $< $(CFLAGS)
 
 .s.o:
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -287,15 +327,22 @@ endif
 # not using O3 and -fno-expensive-optimizations seems to also help, but you may
 # want to remove this stuff for better performance if your compiler can handle it
 ifeq "$(DEBUG)" "0"
+ifeq (,$(findstring msvc,$(platform)))
 cpu/fame/famec.o: CFLAGS += -g0 -O2 -fno-expensive-optimizations
+else
+cpu/fame/famec.o: CFLAGS += -Od
+endif
 endif
 
 pico/carthw_cfg.c: pico/carthw.cfg
 	tools/make_carthw_c $< $@
 
+# preprocessed asm files most probably include the offsets file
+$(filter %.S,$(SRCS_COMMON)): pico/pico_int_offs.h
+
 # random deps
 pico/carthw/svp/compiler.o : cpu/drc/emit_arm.c
-cpu/sh2/compiler.o : cpu/drc/emit_arm.c cpu/drc/emit_arm64.c
+cpu/sh2/compiler.o : cpu/drc/emit_arm.c cpu/drc/emit_arm64.c cpu/drc/emit_ppc.c
 cpu/sh2/compiler.o : cpu/drc/emit_x86.c cpu/drc/emit_mips.c cpu/drc/emit_riscv.c
 cpu/sh2/mame/sh2pico.o : cpu/sh2/mame/sh2.c
 pico/pico.o pico/cd/mcd.o pico/32x/32x.o : pico/pico_cmn.c pico/pico_int.h

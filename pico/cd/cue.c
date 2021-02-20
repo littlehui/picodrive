@@ -13,6 +13,10 @@
 #include "../pico_int.h"
 // #define elprintf(w,f,...) printf(f "\n",##__VA_ARGS__);
 
+#ifdef USE_LIBRETRO_VFS
+#include "file_stream_transforms.h"
+#endif
+
 #ifdef _MSC_VER
 #define snprintf _snprintf
 #endif
@@ -67,16 +71,18 @@ static int get_ext(const char *fname, char ext[4],
 {
 	int len, pos = 0;
 	
-	len = strlen(fname);
-	if (len >= 3)
-		pos = len - 3;
+	len = strrchr(fname, '.') - fname;
+	if (len > 0)
+		pos = len;
 
-	strcpy(ext, fname + pos);
+	strcpy(ext, fname + pos + 1);
 
 	if (base != NULL) {
-		len = pos;
-		if (len + 1 < base_size)
-			len = base_size - 1;
+		if (pos + 1 < base_size)
+			pos = base_size - 1;
+
+		len = (pos < len) ? pos : len;
+
 		memcpy(base, fname, len);
 		base[len] = 0;
 	}
@@ -147,9 +153,8 @@ cue_data_t *cue_parse(const char *fname)
 
 	// the basename of cuefile, no path
 	snprintf(cue_base, sizeof(cue_base), "%s", current_filep);
-	p = cue_base + strlen(cue_base);
-	if (p - 3 >= cue_base)
-		p[-3] = 0;
+	p = strrchr(cue_base, '.');
+	if (p)	p[1] = '\0';
 
 	data = calloc(1, sizeof(*data) + count_alloc * sizeof(cue_track));
 	if (data == NULL)

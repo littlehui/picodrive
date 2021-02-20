@@ -7,7 +7,7 @@
  */
 #include "../pico_int.h"
 #include "../sound/ym2612.h"
-#include "../../cpu/sh2/compiler.h"
+#include <cpu/sh2/compiler.h>
 
 struct Pico32x Pico32x;
 SH2 sh2s[2];
@@ -224,7 +224,7 @@ static void p32x_start_blank(void)
     pprof_start(draw);
 
     offs = 8; lines = 224;
-    if ((Pico.video.reg[1] & 8) && !(PicoIn.opt & POPT_ALT_RENDERER)) {
+    if (Pico.video.reg[1] & 8) {
       offs = 0;
       lines = 240;
     }

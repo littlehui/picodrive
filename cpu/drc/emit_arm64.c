@@ -639,10 +639,10 @@ static void emith_arith_imm(int op, int wx, int rd, int rn, s32 imm)
 		int rs = rn;
 		if ((imm) & 0x000fff) {
 			EMIT(sz64|A64_OP_IMM12(op, rd, rs, imm, 0)); rs = rd;
-		}
+	       	}
 		if ((imm) & 0xfff000) {
 			EMIT(sz64|A64_OP_IMM12(op, rd, rs, imm >>12, 1));
-		}
+	       	}
 	}
 }
 
@@ -932,7 +932,7 @@ static void emith_ldst_offs(int sz, int rd, int rn, int o9, int ld, int mode)
 	emith_ldst_offs(AM_W, r, rs, offs, LT_LD, AM_IDX)
 #define emith_read_r_r_offs_c(cond, r, rs, offs) \
 	emith_read_r_r_offs(r, rs, offs)
-
+ 
 #define emith_read_r_r_r_ptr(r, rs, rm) \
 	EMIT(A64_LDSTX_REG(r, rs, rm, LT_LD, XT_SXTW))
 
@@ -1142,6 +1142,17 @@ static void emith_ldst_offs(int sz, int rd, int rn, int o9, int ld, int mode)
 	rcache_free_tmp(_t); \
 } while (0)
 
+#define emith_abijump_reg(r) \
+	emith_jump_reg(r)
+#define emith_abijump_reg_c(cond, r) \
+	emith_abijump_reg(r)
+#define emith_abicall(target) \
+	emith_call(target)
+#define emith_abicall_cond(cond, target) \
+	emith_abicall(target)
+#define emith_abicall_reg(r) \
+	emith_call_reg(r)
+
 #define emith_call_cleanup()	/**/
 
 #define emith_ret() \
@@ -1173,9 +1184,11 @@ static void emith_ldst_offs(int sz, int rd, int rn, int o9, int ld, int mode)
 #define emith_pool_commit(j)	/**/
 #define emith_insn_ptr()	((u8 *)tcache_ptr)
 #define	emith_flush()		/**/
-#define host_instructions_updated(base, end) __builtin___clear_cache(base, end)
+#define host_instructions_updated(base, end, force) \
+	do { if (force) __builtin___clear_cache(base, end); } while (0)
 #define	emith_update_cache()	/**/
 #define emith_rw_offs_max()	0xff
+#define emith_uext_ptr(r)	/**/
 
 
 // SH2 drc specific

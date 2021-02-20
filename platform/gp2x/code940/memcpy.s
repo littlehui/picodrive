@@ -119,7 +119,7 @@ stmdb sp!, {r4, r7, r8, r9, r10}  /* borrow r4 */
 Lmemcpy_floop32:
 ldmia r1!, {r3, r4, r7, r8, r9, r10, r12, lr}
 stmia r0!, {r3, r4, r7, r8, r9, r10, r12, lr}
-subs r2, r2, #0x20
+subs r2, r2, #0x20        
 bge Lmemcpy_floop32
 
 cmn r2, #0x10
@@ -317,7 +317,7 @@ blt Lmemcpy_bl32
 Lmemcpy_bloop32:
 ldmdb r1!, {r3, r4, r7, r8, r9, r10, r12, lr}
 stmdb r0!, {r3, r4, r7, r8, r9, r10, r12, lr}
-subs r2, r2, #0x20
+subs r2, r2, #0x20        
 bge Lmemcpy_bloop32
 
 Lmemcpy_bl32:

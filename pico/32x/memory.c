@@ -42,7 +42,7 @@
 #include "../pico_int.h"
 #include "../memory.h"
 
-#include "../../cpu/sh2/compiler.h"
+#include <cpu/sh2/compiler.h>
 DRC_DECLARE_SR;
 
 static const char str_mars[] = "MARS";
@@ -163,7 +163,7 @@ void NOINLINE p32x_sh2_poll_event(SH2 *sh2, u32 flags, u32 m68k_cycles)
     sh2->poll_addr = sh2->poll_cycles = sh2->poll_cnt = 0;
 }
 
-static void sh2s_sync_on_read(SH2 *sh2, unsigned cycles)
+static NOINLINE void sh2s_sync_on_read(SH2 *sh2, unsigned cycles)
 {
   if (sh2->poll_cnt != 0)
     return;
@@ -1587,13 +1587,13 @@ static void sh2_sdram_poll(u32 a, u32 d, SH2 *sh2)
   DRC_RESTORE_SR(sh2);
 }
 
-void sh2_sdram_checks(u32 a, u32 d, SH2 *sh2, u32 t)
+void NOINLINE sh2_sdram_checks(u32 a, u32 d, SH2 *sh2, u32 t)
 {
   if (t & 0x80)         sh2_sdram_poll(a, d, sh2);
   if (t & 0x7f)         sh2_drc_wcheck_ram(a, 2, sh2);
 }
 
-void sh2_sdram_checks_l(u32 a, u32 d, SH2 *sh2, u32 t)
+void NOINLINE sh2_sdram_checks_l(u32 a, u32 d, SH2 *sh2, u32 t)
 {
   if (t & 0x000080)     sh2_sdram_poll(a, d>>16, sh2);
   if (t & 0x800000)     sh2_sdram_poll(a+2, d, sh2);
@@ -1689,6 +1689,18 @@ static void REGPARM(3) sh2_write8_da(u32 a, u32 d, SH2 *sh2)
 #endif
 }
 #endif
+
+static void REGPARM(3) sh2_write8_sdram_wt(u32 a, u32 d, SH2 *sh2)
+{
+  // xmen sync hack..
+  if (a < 0x26000200) {
+    DRC_SAVE_SR(sh2);
+    sh2_end_run(sh2, 32);
+    DRC_RESTORE_SR(sh2);
+  }
+
+  sh2_write8_sdram(a, d, sh2);
+}
 
 // write16
 static void REGPARM(3) sh2_write16_unmapped(u32 a, u32 d, SH2 *sh2)
@@ -1817,7 +1829,7 @@ static void REGPARM(3) sh2_write32_dram(u32 a, u32 d, SH2 *sh2)
 static void REGPARM(3) sh2_write32_sdram(u32 a, u32 d, SH2 *sh2)
 {
   u32 a1 = a & 0x3fffc;
-  *(u32 *)(sh2->p_sdram + a1) = (d << 16) | (d >> 16);
+  *(u32 *)((char*)sh2->p_sdram + a1) = (d << 16) | (d >> 16);
 #ifdef DRC_SH2
   u8 *p = sh2->p_drcblk_ram;
   u32 t = p[a1 >> SH2_DRCBLK_RAM_SHIFT];
@@ -1940,7 +1952,7 @@ void *p32x_sh2_get_mem_ptr(u32 a, u32 *mask, SH2 *sh2)
   } else if ((a & 0xc6000000) == 0x02000000) {
     // banked ROM. Return bank address
     u32 bank = carthw_ssf2_banks[(a >> 19) & 7] << 19;
-    ret = sh2->p_rom + bank;
+    ret = (char*)sh2->p_rom + bank;
     *mask = 0x07ffff;
   }
 
@@ -1950,7 +1962,7 @@ void *p32x_sh2_get_mem_ptr(u32 a, u32 *mask, SH2 *sh2)
 int p32x_sh2_memcpy(u32 dst, u32 src, int count, int size, SH2 *sh2)
 {
   u32 mask;
-  void *ps, *pd;
+  u8 *ps, *pd;
   int len, i;
 
   // check if src and dst points to memory (rom/sdram/dram/da)
@@ -2380,6 +2392,8 @@ void PicoMemSetup32x(void)
   msh2_read16_map[0x06/2].addr  = msh2_read16_map[0x26/2].addr  =
   msh2_read32_map[0x06/2].addr  = msh2_read32_map[0x26/2].addr  = MAP_MEMORY(Pico32xMem->sdram);
   msh2_write8_map[0x06/2]       = msh2_write8_map[0x26/2]       = sh2_write8_sdram;
+  msh2_write8_map[0x26/2]       = sh2_write8_sdram_wt;
+
   msh2_write16_map[0x06/2]      = msh2_write16_map[0x26/2]      = sh2_write16_sdram;
   msh2_write32_map[0x06/2]      = msh2_write32_map[0x26/2]      = sh2_write32_sdram;
   msh2_read8_map[0x06/2].mask   = msh2_read8_map[0x26/2].mask   = 0x03ffff;

@@ -450,13 +450,13 @@ int disarm(uintptr_t pc, uint32_t insn, char *buf, size_t buf_len, unsigned long
 
 	if ((insn & 0x0f8000f0) == 0x00800090)
 		return multiply_long(pc, insn, buf, buf_len);
-
+	
 	if ((insn & 0x0f000010) == 0x0e000000)
 		return coprocessor_data_operation(pc, insn, buf, buf_len);
 
 	if ((insn & 0x0f000010) == 0x0e000010)
 		return coprocessor_register_transfer(pc, insn, buf, buf_len);
-
+	
 	if ((insn & 0x0f000000) == 0x0f000000)
 		return software_interrupt(pc, insn, buf, buf_len);
 
@@ -482,3 +482,4 @@ int disarm(uintptr_t pc, uint32_t insn, char *buf, size_t buf_len, unsigned long
 
 	return 0;
 }
+

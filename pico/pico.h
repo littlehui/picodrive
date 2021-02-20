@@ -10,6 +10,7 @@
 #ifndef PICO_H
 #define PICO_H
 
+#include <stdint.h> // [u]int<n>_t
 #include <stdlib.h> // size_t
 
 #ifdef __cplusplus
@@ -55,7 +56,7 @@ extern void *p32x_bios_g, *p32x_bios_m, *p32x_bios_s;
 #define POPT_EN_Z80         (1<< 2)
 #define POPT_EN_STEREO      (1<< 3)
 #define POPT_ALT_RENDERER   (1<< 4) // 00 00x0
-// unused                   (1<< 5)
+#define POPT_EN_YM2413      (1<< 5)
 // unused                   (1<< 6)
 #define POPT_ACC_SPRITES    (1<< 7)
 #define POPT_DIS_32C_BORDER (1<< 8) // 00 0x00
@@ -101,6 +102,8 @@ typedef struct
 	unsigned short overclockM68k;  // overclock the emulated 68k, in %
 
 	int sndRate;                   // rate in Hz
+	unsigned short sndFilter;      // Set low pass sound filter 0: off, 1: on (use integer in case we want to add other filter types later)
+	int32_t sndFilterRange;        // Low pass sound filter range [0, 65536]
 	short *sndOut;                 // PCM output buffer
 	void (*writeSound)(int len);   // write .sndOut callback, called once per frame
 
@@ -196,7 +199,7 @@ void PicoDrawSetCallbacks(int (*begin)(unsigned int num), int (*end)(unsigned in
 void vidConvCpyRGB565(void *to, void *from, int pixels);
 #endif
 void PicoDoHighPal555(int sh, int line, struct PicoEState *est);
-// internals
+// internals, NB must keep in sync with ASM draw functions
 #define PDRAW_SPRITES_MOVED (1<<0) // SAT address modified
 #define PDRAW_WND_DIFF_PRIO (1<<1) // not all window tiles use same priority
 #define PDRAW_PARSE_SPRITES (1<<2) // SAT needs parsing
@@ -205,8 +208,10 @@ void PicoDoHighPal555(int sh, int line, struct PicoEState *est);
 #define PDRAW_SONIC_MODE    (1<<5) // mid-frame palette changes for 8bit renderer
 #define PDRAW_PLANE_HI_PRIO (1<<6) // have layer with all hi prio tiles (mk3)
 #define PDRAW_SHHI_DONE     (1<<7) // layer sh/hi already processed
-#define PDRAW_32_COLS       (1<<8) // 32 column mode
+#define PDRAW_32_COLS       (1<<8) // 32 columns mode
 #define PDRAW_BORDER_32     (1<<9) // center H32 in buffer (32 px border)
+#define PDRAW_SKIP_FRAME   (1<<10) // frame is skipped
+#define PDRAW_30_ROWS      (1<<11) // 30 rows mode (240 lines)
 extern int rendstatus_old;
 extern int rendlines;
 

@@ -76,7 +76,7 @@ SRCS_COMMON += $(R)pico/32x/draw_arm.S
 endif
 ifeq "$(asm_32xmemory)" "1"
 DEFINES += _ASM_32X_MEMORY_C
-SRCS_COMMON += $(R)pico/32x/memory_arm.s
+SRCS_COMMON += $(R)pico/32x/memory_arm.S
 endif
 ifeq "$(asm_mix)" "1"
 SRCS_COMMON += $(R)pico/sound/mix_arm.S
@@ -124,6 +124,7 @@ endif
 # sound
 SRCS_COMMON += $(R)pico/sound/sound.c
 SRCS_COMMON += $(R)pico/sound/sn76496.c $(R)pico/sound/ym2612.c
+SRCS_COMMON += $(R)pico/sound/emu2413/emu2413.c
 ifneq "$(ARCH)$(asm_mix)" "arm1"
 SRCS_COMMON += $(R)pico/sound/mix.c
 endif
@@ -199,7 +200,7 @@ $(FR)cpu/cyclone/Cyclone.h:
 
 $(FR)cpu/cyclone/Cyclone.s: $(FR)cpu/$(CYCLONE_CONFIG)
 	@echo building Cyclone...
-	@make -C $(R)cpu/cyclone/ CONFIG_FILE=../$(CYCLONE_CONFIG) HAVE_ARMv6=$(HAVE_ARMv6)
+	@make CC=$(CYCLONE_CC) CXX=$(CYCLONE_CXX) -C $(R)cpu/cyclone/ CONFIG_FILE=../$(CYCLONE_CONFIG) HAVE_ARMv6=$(HAVE_ARMv6)
 
 $(FR)cpu/cyclone/Cyclone.s: $(FR)cpu/cyclone/*.cpp $(FR)cpu/cyclone/*.h
 

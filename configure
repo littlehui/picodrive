@@ -2,12 +2,6 @@
 # some elements originated from qemu configure
 set -e
 
-#RG350 gcw0
-TC="/opt/gcw0-toolchain"
-CROSS_COMPILE=mipsel-gcw0-linux-uclibc-
-CFLAGS="-I$TC/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include -I$TC/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include/SDL"
-LDFLAGS="--sysroot $TC/usr/mipsel-gcw0-linux-uclibc/sysroot"
-
 TMPC="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}.c"
 TMPO="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}.o"
 TMPB="/tmp/picodrive-conf-${RANDOM}-$$-${RANDOM}"
@@ -23,7 +17,7 @@ compile_object()
 
 compile_binary()
 {
-  c="$CC $CFLAGS $TMPC -o $TMPB $LDFLAGS $@"
+  c="$CC $CFLAGS $TMPC -o $TMPB $LDFLAGS $@ $SYSLIBS"
   echo $c >> config.log
   $c >> config.log 2>&1
 }
@@ -37,14 +31,14 @@ check_option()
 
 check_define()
 {
-  $CC -E -dD $CFLAGS pico/arm_features.h | grep -q $1 || return 1
+  $CC -E -dD $CFLAGS pico/arm_features.h | grep -q "define[ 	]*$1" || return 1
   return 0
 }
 
 # setting options to "yes" or "no" will make that choice default,
 # "" means "autodetect".
 
-platform_list="generic pandora gp2x wiz caanoo opendingux gcw0 rpi1 rpi2"
+platform_list="generic pandora gp2x wiz caanoo opendingux gcw0 rg350 rpi1 rpi2 psp"
 platform="generic"
 sound_driver_list="oss alsa sdl"
 sound_drivers=""
@@ -68,7 +62,12 @@ CC="${CC-${CROSS_COMPILE}gcc}"
 CXX="${CXX-${CROSS_COMPILE}g++}"
 AS="${AS-${CROSS_COMPILE}as}"
 STRIP="${STRIP-${CROSS_COMPILE}strip}"
-test -n "$SDL_CONFIG" || SDL_CONFIG="`$CC $CFLAGS $LDFLAGS --print-sysroot 2> /dev/null || true`/usr/bin/sdl-config"
+SYSROOT=`$CC $CFLAGS $LDFLAGS --print-sysroot 2> /dev/null || true`
+test -n "$SDL_CONFIG" || SDL_CONFIG="$(ls $SYSROOT/*bin*/sdl-config 2>/dev/null | grep /bin/sdl-config | head -n 1)"
+test -n "$SDL_CONFIG" || SDL_CONFIG="$(ls $SYSROOT/*/*bin*/sdl-config 2>/dev/null | grep /bin/sdl-config | head -n 1)"
+#test -n "$SDL_CONFIG" || SDL_CONFIG="$(ls $SYSROOT/*bin*/sdl2-config 2>/dev/null | grep /bin/sdl2-config | head -n 1)"
+#test -n "$SDL_CONFIG" || SDL_CONFIG="$(ls $SYSROOT/*/*bin*/sdl2-config 2>/dev/null | grep /bin/sdl2-config | head -n 1)"
+SDLVERSION=sdl && echo $SDL_CONFIG | grep -q sdl2 && SDLVERSION=sdl2
 MAIN_LDLIBS="$LDLIBS -lm"
 config_mak="config.mak"
 
@@ -92,9 +91,10 @@ set_platform()
     ;;
   generic)
     ;;
-  opendingux | gcw0)
+  opendingux | gcw0 | rg350)
     sound_drivers="sdl"
     # both are really an opendingux
+    CFLAGS="$CFLAGS -D__`echo $platform | tr '[a-z]' '[A-Z]'`__"
     platform="opendingux"
     ;;
   pandora)
@@ -113,6 +113,12 @@ set_platform()
     # unified binary for all of them
     CFLAGS="$CFLAGS -D__GP2X__"
     platform="gp2x"
+    ;;
+  psp)
+    # use newlib
+    SYSLIBS="-lc -lpspuser -lpspkernel"
+    CFLAGS="$CFLAGS -D__PSP__"
+    ARCH=mipsel
     ;;
   *)
     fail "unsupported platform: $platform"
@@ -278,7 +284,7 @@ esac
 
 # basic compiler test
 cat > $TMPC <<EOF
-int main(void) { return 0; }
+int main (int argc, char *argv[]) { return 0; }
 EOF
 if ! compile_binary; then
   fail "compiler test failed, please check config.log"
@@ -289,7 +295,7 @@ check_zlib()
 {
   cat > $TMPC <<EOF
   #include <zlib.h>
-  int main(void) { uncompress(0, 0, 0, 0); }
+  int main (int argc, char *argv[]) { uncompress(0, 0, 0, 0); }
 EOF
   compile_binary "$@"
 }
@@ -298,7 +304,7 @@ check_libpng()
 {
   cat > $TMPC <<EOF
   #include <png.h>
-  void main() { png_init_io(0, 0); }
+  int main (int argc, char *argv[]) { png_init_io(0, 0); }
 EOF
 #  compile_binary
   compile_object
@@ -309,7 +315,7 @@ check_oss()
   cat > $TMPC <<EOF
   #include <sys/soundcard.h>
   #include <sys/ioctl.h>
-  void main() { int a=0; ioctl(0, SNDCTL_DSP_SETFMT, &a); }
+  int main (int argc, char *argv[]) { int a=0; ioctl(0, SNDCTL_DSP_SETFMT, &a); }
 EOF
   compile_binary
 }
@@ -318,7 +324,7 @@ check_alsa()
 {
   cat > $TMPC <<EOF
   #include <alsa/asoundlib.h>
-  void main() { snd_pcm_open(0, 0, 0, 0); }
+  int main (int argc, char *argv[]) { snd_pcm_open(0, 0, 0, 0); }
 EOF
   compile_binary "$@"
 }
@@ -327,7 +333,7 @@ check_sdl()
 {
   cat > $TMPC <<EOF
   #include <SDL.h>
-  void main() { SDL_OpenAudio(0, 0); }
+  int main (int argc, char *argv[]) { SDL_OpenAudio(0, 0); }
 EOF
   compile_binary "$@"
 }
@@ -336,12 +342,12 @@ check_libavcodec()
 {
   cat > $TMPC <<EOF
   #include <libavcodec/avcodec.h>
-  void main() { avcodec_decode_audio3(0, 0, 0, 0); }
+  int main (int argc, char *argv[]) { avcodec_decode_audio3(0, 0, 0, 0); }
 EOF
   compile_object "$@"
 }
 
-check_zlib -lz &&MAIN_LDLIBS="$MAIN_LDLIBS -lz" || need_zlib="yes"
+check_zlib -lz && MAIN_LDLIBS="$MAIN_LDLIBS -lz" || need_zlib="yes"
 
 MAIN_LDLIBS="-lpng $MAIN_LDLIBS"
 check_libpng || fail "please install libpng (libpng-dev)"
@@ -382,6 +388,9 @@ if [ "$need_sdl" = "yes" ]; then
   CFLAGS="$CFLAGS `$SDL_CONFIG --cflags`"
   MAIN_LDLIBS="`$SDL_CONFIG --libs` $MAIN_LDLIBS"
   check_sdl `$SDL_CONFIG --libs` || fail "please install libsdl (libsdl1.2-dev)"
+  if [ "$SDLVERSION" = "sdl2" ]; then
+    CFLAGS="$CFLAGS -D__USE_SDL2__"
+  fi
 fi
 
 if check_option -Wno-unused_result; then
@@ -426,6 +435,10 @@ if [ "$have_libavcodec" = "yes" ]; then
 fi
 if [ "$need_zlib" = "yes" ]; then
   echo "PLATFORM_ZLIB = 1" >> $config_mak
+fi
+if [ "$ARCH" = "arm" -a "$have_armv6" != "yes" -a "$have_armv7" != "yes" ]; then
+  # pass info to cyclone not to use newer arm arch instructions
+  echo "HAVE_ARMv6 = 0" >> $config_mak
 fi
 
 # GP2X toolchains are too old for UAL asm,

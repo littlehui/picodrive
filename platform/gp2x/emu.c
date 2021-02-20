@@ -98,10 +98,6 @@ static void change_renderer(int diff)
 		r = &currentConfig.renderer;
 	*r += diff;
 
-	// 8bpp fast is not there (yet?)
-	if ((PicoIn.AHW & PAHW_SMS) && *r == RT_8BIT_FAST)
-		(*r)++;
-
 	if      (*r >= RT_COUNT)
 		*r = 0;
 	else if (*r < 0)
@@ -109,7 +105,7 @@ static void change_renderer(int diff)
 }
 
 #define is_16bit_mode() \
-	(get_renderer() == RT_16BIT || (PicoIn.AHW & PAHW_32X))
+	(currentConfig.renderer == RT_16BIT || (PicoIn.AHW & PAHW_32X))
 
 static void (*osd_text)(int x, int y, const char *text);
 
@@ -196,7 +192,7 @@ static void draw_pico_ptr(void)
 	int x, y, pitch = 320;
 
 	// only if pen enabled and for 16bit modes
-	if (pico_inp_mode == 0 || currentConfig.EmuOpt != RT_16BIT)
+	if (pico_inp_mode == 0 || !is_16bit_mode())
 		return;
 
 	x = pico_pen_x + PICO_PEN_ADJUST_X;
@@ -364,7 +360,12 @@ void pemu_finalize_frame(const char *fps, const char *notice)
 			localPalSize = make_local_pal(1);
 		// a hack for VR
 		if (PicoIn.AHW & PAHW_SVP)
-			memset32((int *)(Pico.est.Draw2FB+328*8+328*223), 0xe0e0e0e0, 328);
+			memset32((int *)(Pico.est.Draw2FB+328*8+328*223), 0xe0e0e0e0, 328/4);
+		// clear top and bottom of overlap trash
+		if (!(Pico.est.rendstatus & PDRAW_30_ROWS)) {
+			memset32((int *)(Pico.est.Draw2FB+8*(224+8)), 0xe0e0e0e0, 328*8/4);
+			memset32((int *)(Pico.est.Draw2FB), 0xe0e0e0e0, 328*8/4);
+		}
 		// do actual copy
 		vidcpyM2(g_screen_ptr, Pico.est.Draw2FB+328*8,
 			!(Pico.video.reg[12] & 1), !(PicoIn.opt & POPT_DIS_32C_BORDER));
@@ -398,7 +399,10 @@ void plat_video_flip(void)
 
 	if (is_16bit_mode())
 		stride *= 2;
-	PicoDrawSetOutBuf(g_screen_ptr, stride);
+	// the fast renderer has overlap areas and can't directly render to
+	// screen buffers. Its output is copied to screen in finalize_frame
+	if (currentConfig.renderer != RT_8BIT_FAST || (PicoIn.AHW & PAHW_32X))
+		PicoDrawSetOutBuf(g_screen_ptr, stride);
 }
 
 /* XXX */
@@ -433,30 +437,31 @@ void plat_video_wait_vsync(void)
 
 void plat_status_msg_clear(void)
 {
-	int is_8bit = !is_16bit_mode();
-	if (currentConfig.EmuOpt & EOPT_WIZ_TEAR_FIX) {
-		/* ugh.. */
-		int i, u, *p;
-		if (is_8bit) {
-			for (i = 0; i < 4; i++) {
+	int i, is_8bit = !is_16bit_mode();
+
+	for (i = 0; i < 4; i++) {
+		if (currentConfig.EmuOpt & EOPT_WIZ_TEAR_FIX) {
+			/* ugh.. */
+			int u, *p;
+			if (is_8bit) {
 				p = (int *)gp2x_screens[i] + (240-8) / 4;
 				for (u = 320; u > 0; u--, p += 240/4)
 					p[0] = p[1] = 0xe0e0e0e0;
-			}
-		} else {
-			for (i = 0; i < 4; i++) {
+			} else {
 				p = (int *)gp2x_screens[i] + (240-8)*2 / 4;
 				for (u = 320; u > 0; u--, p += 240*2/4)
 					p[0] = p[1] = p[2] = p[3] = 0;
 			}
+		} else {
+			if (is_8bit) {
+				char *d = (char *)gp2x_screens[i] + 320 * (240-8);
+				memset32((int *)d, 0xe0e0e0e0, 320 * 8 / 4);
+			} else {
+				char *d = (char *)gp2x_screens[i] + 320*2 * (240-8);
+				memset32((int *)d, 0, 2*320 * 8 / 4);
+			}
 		}
-		return;
 	}
-
-	if (is_8bit)
-		gp2x_memset_all_buffers(320*232, 0xe0, 320*8);
-	else
-		gp2x_memset_all_buffers(320*232*2, 0, 320*8*2);
 }
 
 void plat_status_msg_busy_next(const char *msg)
@@ -473,7 +478,6 @@ void plat_status_msg_busy_next(const char *msg)
 
 void plat_status_msg_busy_first(const char *msg)
 {
-	gp2x_memcpy_all_buffers(g_screen_ptr, 0, 320*240*2);
 	plat_status_msg_busy_next(msg);
 }
 
@@ -723,13 +727,12 @@ void pemu_sound_stop(void)
 void pemu_forced_frame(int no_scale, int do_emu)
 {
 	doing_bg_frame = 1;
-	PicoDrawSetOutBuf(g_screen_ptr, g_screen_width * 2);
 	PicoDrawSetCallbacks(NULL, NULL);
 	Pico.m.dirtyPal = 1;
 
 	if (!no_scale)
 		no_scale = currentConfig.scaling == EOPT_SCALE_NONE;
-	emu_cmn_forced_frame(no_scale, do_emu);
+	emu_cmn_forced_frame(no_scale, do_emu, g_screen_ptr);
 
 	g_menubg_src_ptr = g_screen_ptr;
 	doing_bg_frame = 0;

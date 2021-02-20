@@ -11,6 +11,7 @@
 // saved: r16-r23,r30, reserved: r0(zero), r26-r27(irq), r28(gp), r29(sp)
 // r1,r15,r24,r25(at,t7-t9) are used internally by the code emitter
 // MIPSN32/MIPS64 ABI: params: r4-r11, no caller-reserved save area on stack
+// for PIC code, on function calls r25(t9) must contain the called address
 #define RET_REG		2 // v0
 #define PARAM_REGS	{ 4, 5, 6, 7 } // a0-a3
 #define	PRESERVED_REGS	{ 16, 17, 18, 19, 20, 21, 22, 23 } // s0-s7
@@ -26,6 +27,7 @@
 
 // registers usable for user code: r1-r25, others reserved or special
 #define Z0		0  // zero register
+#define	CR		25 // call register
 #define	GP		28 // global pointer
 #define	SP		29 // stack pointer
 #define	FP		30 // frame pointer
@@ -286,6 +288,7 @@ enum { RB_SRL=0, RB_ROTR=1 };
 #define FN_PSUBU			FN_SUBU
 #define PTR_SCALE			2
 #endif
+#define PTR_SIZE			(1<<PTR_SCALE)
 
 // XXX: tcache_ptr type for SVP and SH2 compilers differs..
 #define EMIT_PTR(ptr, x) \
@@ -366,7 +369,7 @@ static int emith_rt(u32 op)
 		  if ((op>>26) == OP__FN3)
 			return	emith_has_(rt,2,op, 0,0x3f) ? (op>>16)&0x1f : 0;
 		  if ((op>>26) == OP__RT)
-			return 0;
+		  	return 0;
 		  return	emith_has_(rt,4,op,26,0x3f) ? (op>>16)&0x1f : 0;
 		}
 static int emith_rd(u32 op)
@@ -380,8 +383,8 @@ static int emith_rd(u32 op)
 		  if ((op>>26) == OP__FN3 && (op&0x3f) != FN3_BSHFL)
 			ret =	emith_has_(rd,2,op, 0,0x3f) ? (op>>16)&0x1f :-1;
 		  if ((op>>26) == OP__RT)
-			ret =	-1;
-		  return (ret ?: -1);	// Z0 doesn't have dependencies
+		  	ret =	-1;
+		  return (ret ? ret : -1);	// Z0 doesn't have dependencies
 		}
 
 static int emith_b_isswap(u32 bop, u32 lop)
@@ -505,7 +508,7 @@ static void *emith_branch(u32 op)
 // the FV register stores information for V flag calculation (used for
 // GT,GE,LT,LE,VC,VS). V flag is costly and only fully calculated when needed.
 // the core registers may be temp registers, since the condition after calls
-// is undefined anyway.
+// is undefined anyway. 
 
 // flag emulation creates 2 (ie cmp #0/beq) up to 9 (ie adcf/ble) extra insns.
 // flag handling shortcuts may reduce this by 1-4 insns, see emith_cond_check()
@@ -530,7 +533,7 @@ static void emith_set_arith_flags(int rd, int rs, int rt, s32 imm, int sub)
 	if (emith_flg_hint & _FHC) {
 		if (sub)			// C = sub:rt<rd, add:rd<rt
 			EMIT(MIPS_SLTU_REG(FC, rs, FNZ));
-		else	EMIT(MIPS_SLTU_REG(FC, FNZ, rs));// C in FC, bit 0
+		else	EMIT(MIPS_SLTU_REG(FC, FNZ, rs));// C in FC, bit 0 
 	}
 
 	if (emith_flg_hint & _FHV) {
@@ -1180,7 +1183,7 @@ static void emith_lohi_nops(void)
 	EMIT(MIPS_LW(r, rs, offs))
 #define emith_read_r_r_offs_c(cond, r, rs, offs) \
 	emith_read_r_r_offs(r, rs, offs)
-
+ 
 #define emith_read_r_r_r_ptr(r, rs, rm) do { \
 	emith_add_r_r_r(AT, rs, rm); \
 	EMIT(MIPS_OP_IMM(OP_LP, r, AT, 0)); \
@@ -1509,8 +1512,8 @@ static int emith_cond_check(int cond, int *r)
 	emith_jump_reg(r)
 
 #define emith_jump_ctx(offs) do { \
-	emith_ctx_read_ptr(AT, offs); \
-	emith_jump_reg(AT); \
+	emith_ctx_read_ptr(CR, offs); \
+	emith_jump_reg(CR); \
 } while (0)
 #define emith_jump_ctx_c(cond, offs) \
 	emith_jump_ctx(offs)
@@ -1522,10 +1525,26 @@ static int emith_cond_check(int cond, int *r)
 
 #define emith_call_reg(r) \
 	emith_branch(MIPS_JALR(LR, r))
-
 #define emith_call_ctx(offs) do { \
-	emith_ctx_read_ptr(AT, offs); \
-	emith_call_reg(AT); \
+	emith_ctx_read_ptr(CR, offs); \
+	emith_call_reg(CR); \
+} while (0)
+
+#define emith_abijump_reg(r) do { \
+	if ((r) != CR) emith_move_r_r(CR, r); \
+	emith_branch(MIPS_JR(CR)); \
+} while (0)
+#define emith_abijump_reg_c(cond, r) \
+	emith_abijump_reg(r)
+#define emith_abicall(target) do { \
+	emith_move_r_ptr_imm(CR, target); \
+	emith_branch(MIPS_JALR(LR, CR)); \
+} while (0)
+#define emith_abicall_cond(cond, target) \
+	emith_abicall(target)
+#define emith_abicall_reg(r) do { \
+	if ((r) != CR) emith_move_r_r(CR, r); \
+	emith_branch(MIPS_JALR(LR, CR)); \
 } while (0)
 
 #define emith_call_cleanup()	/**/
@@ -1541,16 +1560,18 @@ static int emith_cond_check(int cond, int *r)
 #define emith_add_r_ret(r) \
 	emith_add_r_r_ptr(r, LR)
 
-// NB: ABI SP alignment is 8 for compatibility with MIPS IV
+// NB: ABI SP alignment is 8 for 64 bit, O32 has a 16 byte arg save area
 #define emith_push_ret(r) do { \
-	emith_add_r_r_ptr_imm(SP, SP, -8-16); /* O32: 16 byte arg save area */ \
-	emith_write_r_r_offs(LR, SP, 4+16); \
-	if ((r) > 0) emith_write_r_r_offs(r, SP, 0+16); \
+	int offs_ = 8+16 - 2*PTR_SIZE; \
+	emith_add_r_r_ptr_imm(SP, SP, -8-16); \
+	emith_write_r_r_offs_ptr(LR, SP, offs_ + PTR_SIZE); \
+	if ((r) > 0) emith_write_r_r_offs(r, SP, offs_); \
 } while (0)
 
 #define emith_pop_and_ret(r) do { \
-	if ((r) > 0) emith_read_r_r_offs(r, SP, 0+16); \
-	emith_read_r_r_offs(LR, SP, 4+16); \
+	int offs_ = 8+16 - 2*PTR_SIZE; \
+	if ((r) > 0) emith_read_r_r_offs(r, SP, offs_); \
+	emith_read_r_r_offs_ptr(LR, SP, offs_ + PTR_SIZE); \
 	emith_add_r_r_ptr_imm(SP, SP, 8+16); \
 	emith_ret(); \
 } while (0)
@@ -1559,28 +1580,52 @@ static int emith_cond_check(int cond, int *r)
 // emitter ABI stuff
 #define emith_pool_check()	/**/
 #define emith_pool_commit(j)	/**/
-// NB: mips32r2 has SYNCI
-#define host_instructions_updated(base, end) __builtin___clear_cache(base, end)
 #define	emith_update_cache()	/**/
 #define emith_rw_offs_max()	0x7fff
+#define emith_uext_ptr(r)	/**/
+
+#if __mips_isa_rev >= 2 && defined(MIPS_USE_SYNCI) && defined(__GNUC__)
+// this should normally be in libc clear_cache; however, it sometimes isn't.
+// core function taken from SYNCI description, MIPS32 instruction set manual
+static NOINLINE void host_instructions_updated(void *base, void *end, int force)
+{
+	int step, tmp;
+	asm volatile(
+	"	rdhwr	%2, $1;"
+	"	bal	0f;"			// needed to allow for jr.hb:
+	"0:	addiu	$ra, $ra, 3f-0b;"	//   set ra to insn after jr.hb
+	"	beqz	%2, 3f;"
+
+	"1:	synci	0(%0);"
+	"	sltu	%3, %0, %1;"
+	"	addu	%0, %0, %2;"
+	"	bnez	%3, 1b;"
+
+	"	sync;"
+	"2:	jr.hb	$ra;"
+	"3:	" : "+r"(base), "+r"(end), "=r"(step), "=r"(tmp) :: "$31");
+}
+#else
+#define host_instructions_updated(base, end, force) __builtin___clear_cache(base, end)
+#endif
 
 // SH2 drc specific
 #define emith_sh2_drc_entry() do { \
-	int _c; u32 _m = 0xd0ff0000; \
+	int _c, _z = PTR_SIZE; u32 _m = 0xd0ff0000; \
 	if (__builtin_parity(_m) == 1) _m |= 0x1; /* ABI align for SP is 8 */ \
-	int _s = count_bits(_m) * 4 + 16, _o = _s; /* 16 byte arg save area */ \
+	int _s = count_bits(_m) * _z + 16, _o = _s; /* 16 O32 arg save area */ \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, -_s); \
 	for (_c = HOST_REGS-1; _m && _c >= 0; _m &= ~(1 << _c), _c--) \
 		if (_m & (1 << _c)) \
-			{ _o -= 4; if (_c) emith_write_r_r_offs(_c, SP, _o); } \
+			{ _o -= _z; if (_c) emith_write_r_r_offs_ptr(_c, SP, _o); } \
 } while (0)
 #define emith_sh2_drc_exit() do { \
-	int _c; u32 _m = 0xd0ff0000; \
+	int _c, _z = PTR_SIZE; u32 _m = 0xd0ff0000; \
 	if (__builtin_parity(_m) == 1) _m |= 0x1; \
-	int _s = count_bits(_m) * 4 + 16, _o = 16; \
+	int _s = count_bits(_m) * _z + 16, _o = 16; \
 	for (_c = 0; _m && _c < HOST_REGS; _m &= ~(1 << _c), _c++) \
 		if (_m & (1 << _c)) \
-			{ if (_c) emith_read_r_r_offs(_c, SP, _o); _o += 4; } \
+			{ if (_c) emith_read_r_r_offs_ptr(_c, SP, _o); _o += _z; } \
 	if (_s) emith_add_r_r_ptr_imm(SP, SP, _s); \
 	emith_ret(); \
 } while (0)
@@ -1600,7 +1645,7 @@ static int emith_cond_check(int cond, int *r)
 	emith_lsl(func, func, PTR_SCALE); \
 	emith_read_r_r_r_ptr(func, tab, func); \
 	emith_move_r_r_ptr(6, CONTEXT_REG); /* arg2 */ \
-	emith_jump_reg(func); \
+	emith_abijump_reg(func); \
 } while (0)
 
 #define emith_sh2_delay_loop(cycles, reg) do {			\
@@ -1797,7 +1842,7 @@ static void emith_set_t_cond(int sr, int cond)
                   EMIT(MIPS_SLTU_IMM(AT,AT, 1)); r=AT; val++; break;
       } else if ((b>>5) == OP_BNE) {
                   EMIT(MIPS_XOR_REG(AT, r, b&0x1f));
-                  EMIT(MIPS_SLTU_IMM(AT,Z0,AT)); r=AT; val++; break;
+                  EMIT(MIPS_SLTU_REG(AT,Z0,AT)); r=AT; val++; break;
       }
   }
   if (val) {
@@ -1824,7 +1869,7 @@ static void emith_set_t_cond(int sr, int cond)
 
 static void emith_set_t(int sr, int val)
 {
-  if (val)
+  if (val) 
     emith_or_r_imm(sr, T);
   else
     emith_bic_r_imm(sr, T);

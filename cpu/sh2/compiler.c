@@ -1,7 +1,7 @@
 /*
  * SH2 recompiler
  * (C) notaz, 2009,2010,2013
- * (C) kub, 2018,2019
+ * (C) kub, 2018,2019,2020
  *
  * This work is licensed under the terms of MAME license.
  * See COPYING file in the top-level directory.
@@ -32,8 +32,8 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include "../../pico/pico_int.h"
-#include "../../pico/arm_features.h"
+#include <pico/pico_int.h>
+#include <pico/arm_features.h>
 #include "sh2.h"
 #include "compiler.h"
 #include "../drc/cmn.h"
@@ -49,6 +49,7 @@
 #define LOOP_DETECTION          1
 #define LOOP_OPTIMIZER          1
 #define T_OPTIMIZER             1
+#define DIV_OPTIMIZER           0
 
 #define MAX_LITERAL_OFFSET      0x200	// max. MOVA, MOV @(PC) offset
 #define MAX_LOCAL_TARGETS       (BLOCK_INSN_LIMIT / 4)
@@ -108,10 +109,6 @@ static int insns_compiled, hash_collisions, host_insn_count;
 #define GET_Rn() \
   ((op >> 8) & 0x0f)
 
-#define SHR_T	30  // separate T for not-used detection
-#define SHR_MEM	31
-#define SHR_TMP -1
-
 #define T	0x00000001
 #define S	0x00000002
 #define I	0x000000f0
@@ -152,8 +149,17 @@ enum op_types {
   OP_RTE,       // RTE instruction
   OP_TRAPA,     // TRAPA instruction
   OP_LDC,       // LDC instruction
+  OP_DIV0,      // DIV0[US] instruction
   OP_UNDEFINED,
 };
+
+struct div {
+  u32 state:1;          // 0: expect DIV1/ROTCL, 1: expect DIV1
+  u32 rn:5, rm:5, ro:5; // rn and rm for DIV1, ro for ROTCL
+  u32 div1:8, rotcl:8;  // DIV1 count, ROTCL count
+};
+union _div { u32 imm; struct div div; };  // XXX tut-tut type punning...
+#define div(opd)	((union _div *)&((opd)->imm))->div
 
 // XXX consider trap insns: OP_TRAPA, OP_UNDEFINED?
 #define OP_ISBRANCH(op) ((BITRANGE(OP_BRANCH, OP_BRANCH_RF)| BITMASK1(OP_RTE)) \
@@ -181,20 +187,20 @@ static char sh2dasm_buff[64];
 
 #define SH2_DUMP(sh2, reason) { \
 	char ms = (sh2)->is_slave ? 's' : 'm'; \
-	printf("%csh2 %s %08x\n", ms, reason, (sh2)->pc); \
-	printf("%csh2 r0-7  %08x %08x %08x %08x %08x %08x %08x %08x\n", ms, \
-		(sh2)->r[0], (sh2)->r[1], (sh2)->r[2], (sh2)->r[3], \
-		(sh2)->r[4], (sh2)->r[5], (sh2)->r[6], (sh2)->r[7]); \
-	printf("%csh2 r8-15 %08x %08x %08x %08x %08x %08x %08x %08x\n", ms, \
-		(sh2)->r[8], (sh2)->r[9], (sh2)->r[10], (sh2)->r[11], \
-		(sh2)->r[12], (sh2)->r[13], (sh2)->r[14], (sh2)->r[15]); \
-	printf("%csh2 pc-ml %08x %08x %08x %08x %08x %08x %08x %08x\n", ms, \
-		(sh2)->pc, (sh2)->ppc, (sh2)->pr, (sh2)->sr&0x3ff, \
-		(sh2)->gbr, (sh2)->vbr, (sh2)->mach, (sh2)->macl); \
-	printf("%csh2 tmp-p  %08x %08x %08x %08x %08x %08x %08x %08x\n", ms, \
+	printf("%csh2 %s %08lx\n", ms, reason, (ulong)(sh2)->pc); \
+	printf("%csh2 r0-7  %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", ms, \
+		(ulong)(sh2)->r[0], (ulong)(sh2)->r[1], (ulong)(sh2)->r[2], (ulong)(sh2)->r[3], \
+		(ulong)(sh2)->r[4], (ulong)(sh2)->r[5], (ulong)(sh2)->r[6], (ulong)(sh2)->r[7]); \
+	printf("%csh2 r8-15 %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", ms, \
+		(ulong)(sh2)->r[8], (ulong)(sh2)->r[9], (ulong)(sh2)->r[10], (ulong)(sh2)->r[11], \
+		(ulong)(sh2)->r[12], (ulong)(sh2)->r[13], (ulong)(sh2)->r[14], (ulong)(sh2)->r[15]); \
+	printf("%csh2 pc-ml %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", ms, \
+		(ulong)(sh2)->pc, (ulong)(sh2)->ppc, (ulong)(sh2)->pr, (ulong)(sh2)->sr&0xfff, \
+		(ulong)(sh2)->gbr, (ulong)(sh2)->vbr, (ulong)(sh2)->mach, (ulong)(sh2)->macl); \
+	printf("%csh2 tmp-p  %08x %08x %08x %08x %08x %08lx %08x %08x\n", ms, \
 		(sh2)->drc_tmp, (sh2)->irq_cycles, \
 		(sh2)->pdb_io_csum[0], (sh2)->pdb_io_csum[1], (sh2)->state, \
-		(sh2)->poll_addr, (sh2)->poll_cycles, (sh2)->poll_cnt); \
+		(ulong)(sh2)->poll_addr, (sh2)->poll_cycles, (sh2)->poll_cnt); \
 }
 
 #if (DRC_DEBUG & (8|256|512|1024)) || defined(PDB)
@@ -246,6 +252,10 @@ static void REGPARM(3) *sh2_drc_log_entry(void *block, SH2 *sh2, u32 sr)
         SH2_DUMP(&fsh2, "file");
         SH2_DUMP(sh2, "current");
         SH2_DUMP(&csh2[idx][0], "previous");
+	char *ps = (char *)sh2, *pf = (char *)&fsh2;
+	for (idx = 0; idx < offsetof(SH2, read8_map); idx += sizeof(u32))
+		if (*(u32 *)(ps+idx) != *(u32 *)(pf+idx))
+			printf("diff reg %ld\n",(long)idx/sizeof(u32));
         exit(1);
       }
       csh2[idx][0] = fsh2;
@@ -370,7 +380,7 @@ static struct block_list *inactive_blocks[TCACHE_BUFFERS];
 // each array has len: sizeof(mem) / INVAL_PAGE_SIZE 
 static struct block_list **inval_lookup[TCACHE_BUFFERS];
 
-#define HASH_TABLE_SIZE(tcid)		((tcid) ? 512 : 64*512)
+#define HASH_TABLE_SIZE(tcid)		((tcid) ? 512 : 32*512)
 static struct block_entry **hash_tables[TCACHE_BUFFERS];
 
 #define HASH_FUNC(hash_tab, addr, mask) \
@@ -394,12 +404,13 @@ int rchit, rcmiss;
 enum cache_reg_htype {
   HRT_TEMP   = 1, // is for temps and args
   HRT_REG    = 2, // is for sh2 regs
-  HRT_STATIC = 2, // is for static mappings (same as HRT_REG)
 };
 
 enum cache_reg_flags {
   HRF_DIRTY  = 1 << 0, // has "dirty" value to be written to ctx
   HRF_PINNED = 1 << 1, // has a pinned mapping
+  HRF_S16    = 1 << 2, // has a sign extended 16 bit value
+  HRF_U16    = 1 << 3, // has a zero extended 16 bit value
 };
 
 enum cache_reg_type {
@@ -409,9 +420,9 @@ enum cache_reg_type {
 };
 
 typedef struct {
-  u8 hreg;      // "host" reg
+  u8 hreg:6;    // "host" reg
   u8 htype:2;   // TEMP or REG?
-  u8 flags:2;   // DIRTY, PINNED?
+  u8 flags:4;   // DIRTY, PINNED?
   u8 type:2;    // CACHED or TEMP?
   u8 locked:2;  // LOCKED reference counter
   u16 stamp;    // kind of a timestamp
@@ -447,17 +458,19 @@ static void rcache_free_tmp(int hr);
 // SR must and R0 should by all means be statically mapped.
 // XXX the static definition of SR MUST match that in compiler.h
 
-#ifdef __arm__
+#if defined(__arm__) || defined(_M_ARM)
 #include "../drc/emit_arm.c"
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
 #include "../drc/emit_arm64.c"
 #elif defined(__mips__)
 #include "../drc/emit_mips.c"
 #elif defined(__riscv__) || defined(__riscv)
 #include "../drc/emit_riscv.c"
-#elif defined(__i386__)
+#elif defined(__powerpc__) || defined(_M_PPC)
+#include "../drc/emit_ppc.c"
+#elif defined(__i386__) || defined(_M_X86)
 #include "../drc/emit_x86.c"
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(_M_X64)
 #include "../drc/emit_x86.c"
 #else
 #error unsupported arch
@@ -703,8 +716,8 @@ static void add_to_hashlist(struct block_entry *be, int tcache_id)
 
 #if (DRC_DEBUG & 2)
   if (be->next != NULL) {
-    printf(" %08x@%p: entry hash collision with %08x@%p\n",
-      be->pc, be->tcache_ptr, be->next->pc, be->next->tcache_ptr);
+    printf(" %08lx@%p: entry hash collision with %08lx@%p\n",
+      (ulong)be->pc, be->tcache_ptr, (ulong)be->next->pc, be->next->tcache_ptr);
     hash_collisions++;
   }
 #endif
@@ -798,16 +811,14 @@ static void dr_block_link(struct block_entry *be, struct block_link *bl, int emi
         // via blx: @jump near jumpcc to blx; @blx far jump
         emith_jump_patch(jump, bl->blx, &jump);
         emith_jump_at(bl->blx, be->tcache_ptr);
-        if ((((uintptr_t)bl->blx & 0x1f) + emith_jump_at_size()-1) > 0x1f)
-          host_instructions_updated(bl->blx, bl->blx + emith_jump_at_size()-1);
+        host_instructions_updated(bl->blx, (char *)bl->blx + emith_jump_at_size(),
+            ((uintptr_t)bl->blx & 0x1f) + emith_jump_at_size()-1 > 0x1f);
       }
     } else {
       printf("unknown BL type %d\n", bl->type);
       exit(1);
     }
-    // only needs sync if patch is possibly crossing cacheline (assume 32 byte)
-    if ((((uintptr_t)jump & 0x1f) + jsz-1) > 0x1f)
-      host_instructions_updated(jump, jump + jsz-1);
+    host_instructions_updated(jump, jump + jsz, ((uintptr_t)jump & 0x1f) + jsz-1 > 0x1f);
   }
 
   // move bl to block_entry
@@ -838,13 +849,13 @@ static void dr_block_unlink(struct block_link *bl, int emit_jump)
         // via blx: @jump near jumpcc to blx; @blx load target_pc, far jump
         emith_jump_patch(bl->jump, bl->blx, &jump);
         memcpy(bl->blx, bl->jdisp, emith_jump_at_size());
-        host_instructions_updated(bl->blx, bl->blx + emith_jump_at_size()-1);
+        host_instructions_updated(bl->blx, (char *)bl->blx + emith_jump_at_size(), 1);
       } else {
         printf("unknown BL type %d\n", bl->type);
         exit(1);
       }
       // update cpu caches since the previous jump target doesn't exist anymore
-      host_instructions_updated(jump, jump + jsz-1);
+      host_instructions_updated(jump, jump + jsz, 1);
     }
 
     if (bl->prev)
@@ -1266,24 +1277,23 @@ static void dr_flush_tcache(int tcid)
   blink_free[tcid] = NULL;
   memset(unresolved_links[tcid], 0, sizeof(*unresolved_links[0]) * HASH_TABLE_SIZE(tcid));
   memset(hash_tables[tcid], 0, sizeof(*hash_tables[0]) * HASH_TABLE_SIZE(tcid));
-  if (Pico32xMem->sdram != NULL) {
-    if (tcid == 0) { // ROM, RAM
-      memset(Pico32xMem->drcblk_ram, 0, sizeof(Pico32xMem->drcblk_ram));
-      memset(Pico32xMem->drclit_ram, 0, sizeof(Pico32xMem->drclit_ram));
-      memset(sh2s[0].branch_cache, -1, sizeof(sh2s[0].branch_cache));
-      memset(sh2s[1].branch_cache, -1, sizeof(sh2s[1].branch_cache));
-      memset(sh2s[0].rts_cache, -1, sizeof(sh2s[0].rts_cache));
-      memset(sh2s[1].rts_cache, -1, sizeof(sh2s[1].rts_cache));
-      sh2s[0].rts_cache_idx = sh2s[1].rts_cache_idx = 0;
-    } else {
-      memset(Pico32xMem->drcblk_ram, 0, sizeof(Pico32xMem->drcblk_ram));
-      memset(Pico32xMem->drclit_ram, 0, sizeof(Pico32xMem->drclit_ram));
-      memset(Pico32xMem->drcblk_da[tcid - 1], 0, sizeof(Pico32xMem->drcblk_da[tcid - 1]));
-      memset(Pico32xMem->drclit_da[tcid - 1], 0, sizeof(Pico32xMem->drclit_da[tcid - 1]));
-      memset(sh2s[tcid - 1].branch_cache, -1, sizeof(sh2s[0].branch_cache));
-      memset(sh2s[tcid - 1].rts_cache, -1, sizeof(sh2s[0].rts_cache));
-      sh2s[tcid - 1].rts_cache_idx = 0;
-    }
+
+  if (tcid == 0) { // ROM, RAM
+    memset(Pico32xMem->drcblk_ram, 0, sizeof(Pico32xMem->drcblk_ram));
+    memset(Pico32xMem->drclit_ram, 0, sizeof(Pico32xMem->drclit_ram));
+    memset(sh2s[0].branch_cache, -1, sizeof(sh2s[0].branch_cache));
+    memset(sh2s[1].branch_cache, -1, sizeof(sh2s[1].branch_cache));
+    memset(sh2s[0].rts_cache, -1, sizeof(sh2s[0].rts_cache));
+    memset(sh2s[1].rts_cache, -1, sizeof(sh2s[1].rts_cache));
+    sh2s[0].rts_cache_idx = sh2s[1].rts_cache_idx = 0;
+  } else {
+    memset(Pico32xMem->drcblk_ram, 0, sizeof(Pico32xMem->drcblk_ram));
+    memset(Pico32xMem->drclit_ram, 0, sizeof(Pico32xMem->drclit_ram));
+    memset(Pico32xMem->drcblk_da[tcid - 1], 0, sizeof(Pico32xMem->drcblk_da[tcid - 1]));
+    memset(Pico32xMem->drclit_da[tcid - 1], 0, sizeof(Pico32xMem->drclit_da[tcid - 1]));
+    memset(sh2s[tcid - 1].branch_cache, -1, sizeof(sh2s[0].branch_cache));
+    memset(sh2s[tcid - 1].rts_cache, -1, sizeof(sh2s[0].rts_cache));
+    sh2s[tcid - 1].rts_cache_idx = 0;
   }
 #if (DRC_DEBUG & 4)
   tcache_dsm_ptrs[tcid] = tcache_ring[tcid].base;
@@ -1328,6 +1338,37 @@ static void rcache_remove_vreg_alias(int x, sh2_reg_e r);
 static void rcache_evict_vreg(int x);
 static void rcache_remap_vreg(int x);
 
+static void rcache_set_x16(int hr, int s16_, int u16_)
+{
+  int x = reg_map_host[hr];
+  if (x >= 0) {
+    cache_regs[x].flags &= ~(HRF_S16|HRF_U16);
+    if (s16_) cache_regs[x].flags |= HRF_S16;
+    if (u16_) cache_regs[x].flags |= HRF_U16;
+  }
+}
+
+static void rcache_copy_x16(int hr, int hr2)
+{
+  int x = reg_map_host[hr], y = reg_map_host[hr2];
+  if (x >= 0 && y >= 0) {
+    cache_regs[x].flags = (cache_regs[x].flags & ~(HRF_S16|HRF_U16)) |
+                          (cache_regs[y].flags &  (HRF_S16|HRF_U16));
+  }
+}
+
+static int rcache_is_s16(int hr)
+{
+  int x = reg_map_host[hr];
+  return (x >= 0 ? cache_regs[x].flags & HRF_S16 : 0);
+}
+
+static int rcache_is_u16(int hr)
+{
+  int x = reg_map_host[hr];
+  return (x >= 0 ? cache_regs[x].flags & HRF_U16 : 0);
+}
+
 #define RCACHE_DUMP(msg) { \
   cache_reg_t *cp; \
   guest_reg_t *gp; \
@@ -1337,7 +1378,7 @@ static void rcache_remap_vreg(int x);
   for (i = 0; i < ARRAY_SIZE(cache_regs); i++) { \
     cp = &cache_regs[i]; \
     if (cp->type != HR_FREE || cp->gregs || cp->locked || cp->flags) \
-      printf("  %d: hr=%d t=%d f=%x c=%d m=%x\n", i, cp->hreg, cp->type, cp->flags, cp->locked, cp->gregs); \
+      printf("  %d: hr=%d t=%d f=%x c=%d m=%lx\n", i, cp->hreg, cp->type, cp->flags, cp->locked, (ulong)cp->gregs); \
   } \
   printf(" guest_regs:\n"); \
   for (i = 0; i < ARRAY_SIZE(guest_regs); i++) { \
@@ -1348,7 +1389,7 @@ static void rcache_remap_vreg(int x);
   printf(" gconsts:\n"); \
   for (i = 0; i < ARRAY_SIZE(gconsts); i++) { \
     if (gconsts[i].gregs) \
-      printf("  %d: m=%x v=%x\n", i, gconsts[i].gregs, gconsts[i].val); \
+      printf("  %d: m=%lx v=%lx\n", i, (ulong)gconsts[i].gregs, (ulong)gconsts[i].val); \
   } \
 }
 
@@ -1461,10 +1502,13 @@ static int gconst_check(sh2_reg_e r)
 static int gconst_try_read(int vreg, sh2_reg_e r)
 {
   int i, x;
+  u32 v;
 
   if (guest_regs[r].flags & GRF_CDIRTY) {
     x = guest_regs[r].cnst;
-    emith_move_r_imm(cache_regs[vreg].hreg, gconsts[x].val);
+    v = gconsts[x].val;
+    emith_move_r_imm(cache_regs[vreg].hreg, v);
+    rcache_set_x16(cache_regs[vreg].hreg, v == (s16)v, v == (u16)v);
     FOR_ALL_BITS_SET_DO(gconsts[x].gregs, i,
       {
         if (guest_regs[i].vreg >= 0 && guest_regs[i].vreg != vreg)
@@ -1635,6 +1679,8 @@ static void rcache_clean_vreg(int x)
               rcache_evict_vreg(guest_regs[r].sreg);
               emith_move_r_r(cache_regs[guest_regs[r].sreg].hreg,
                              cache_regs[guest_regs[r].vreg].hreg);
+              rcache_copy_x16(cache_regs[guest_regs[r].sreg].hreg,
+                             cache_regs[guest_regs[r].vreg].hreg);
               rcache_remove_vreg_alias(x, r);
               rcache_add_vreg_alias(guest_regs[r].sreg, r);
               cache_regs[guest_regs[r].sreg].flags |= HRF_DIRTY;
@@ -1678,11 +1724,7 @@ static void rcache_remove_vreg_alias(int x, sh2_reg_e r)
 
 static void rcache_evict_vreg(int x)
 {
-#if REMAP_REGISTER
   rcache_remap_vreg(x);
-#else
-  rcache_clean_vreg(x);
-#endif
   rcache_unmap_vreg(x);
 }
 
@@ -1775,11 +1817,11 @@ static int rcache_allocate_temp(void)
   return x;
 }
 
-#if REMAP_REGISTER
 // maps a host register to a REG
-static int rcache_map_reg(sh2_reg_e r, int hr, int mode)
+static int rcache_map_reg(sh2_reg_e r, int hr)
 {
-  int x, i;
+#if REMAP_REGISTER
+  int i;
 
   gconst_kill(r);
 
@@ -1791,19 +1833,6 @@ static int rcache_map_reg(sh2_reg_e r, int hr, int mode)
     exit(1);
   }
 
-  // deal with statically mapped regs
-  if (mode == RC_GR_RMW && (guest_regs[r].flags & (GRF_STATIC|GRF_PINNED))) {
-    x = guest_regs[r].sreg;
-    if (guest_regs[r].vreg == x) { 
-      // STATIC in its sreg with no aliases, and some processing pending
-      if (cache_regs[x].gregs == 1 << r)
-        return cache_regs[x].hreg;
-    } else if (cache_regs[x].type == HR_FREE ||
-        (cache_regs[x].type == HR_TEMP && !cache_regs[x].locked))
-      // STATIC not in its sreg, with sreg available -> move it
-      i = guest_regs[r].sreg;
-  }
-
   // remove old mappings of r and i if one exists
   if (guest_regs[r].vreg >= 0)
     rcache_remove_vreg_alias(guest_regs[r].vreg, r);
@@ -1812,7 +1841,6 @@ static int rcache_map_reg(sh2_reg_e r, int hr, int mode)
   // set new mappping
   cache_regs[i].type = HR_CACHED;
   cache_regs[i].gregs = 1 << r;
-  cache_regs[i].flags &= HRF_PINNED;
   cache_regs[i].locked = 0;
   cache_regs[i].stamp = ++rcache_counter;
   cache_regs[i].flags |= HRF_DIRTY;
@@ -1823,11 +1851,15 @@ static int rcache_map_reg(sh2_reg_e r, int hr, int mode)
   RCACHE_CHECK("after map");
 #endif
   return cache_regs[i].hreg;
+#else
+  return rcache_get_reg(r, RC_GR_WRITE, NULL);
+#endif
 }
 
 // remap vreg from a TEMP to a REG if it will be used (upcoming TEMP invalidation)
 static void rcache_remap_vreg(int x)
 {
+#if REMAP_REGISTER
   u32 rsl_d = rcache_regs_soon | rcache_regs_late;
   int d;
 
@@ -1866,12 +1898,14 @@ static void rcache_remap_vreg(int x)
 #if DRC_DEBUG & 64
   RCACHE_CHECK("after remap");
 #endif
-}
+#else
+  rcache_clean_vreg(x);
 #endif
+}
 
-#if ALIAS_REGISTERS
 static void rcache_alias_vreg(sh2_reg_e rd, sh2_reg_e rs)
 {
+#if ALIAS_REGISTERS
   int x;
 
   // if s isn't constant, it must be in cache for aliasing
@@ -1899,8 +1933,14 @@ static void rcache_alias_vreg(sh2_reg_e rd, sh2_reg_e rs)
 #if DRC_DEBUG & 64
   RCACHE_CHECK("after alias");
 #endif
-}
+#else
+  int hr_s = rcache_get_reg(rs, RC_GR_READ, NULL);
+  int hr_d = rcache_get_reg(rd, RC_GR_WRITE, NULL);
+
+  emith_move_r_r(hr_d, hr_s);
+  gconst_copy(rd, rs);
 #endif
+}
 
 // note: must not be called when doing conditional code
 static int rcache_get_reg_(sh2_reg_e r, rc_gr_mode mode, int do_locking, int *hr)
@@ -2004,7 +2044,9 @@ static int rcache_get_reg_(sh2_reg_e r, rc_gr_mode mode, int do_locking, int *hr
     tr->flags |= HRF_DIRTY;
     guest_regs[r].flags |= GRF_DIRTY;
     gconst_kill(r);
-  }
+    rcache_set_x16(tr->hreg, 0, 0);
+  } else if (src >= 0 && cache_regs[src].hreg != tr->hreg)
+    rcache_copy_x16(tr->hreg, cache_regs[src].hreg);
 #if DRC_DEBUG & 64
   RCACHE_CHECK("after getreg");
 #endif
@@ -2346,11 +2388,7 @@ static void rcache_clean_tmp(void)
   for (i = 0; i < ARRAY_SIZE(cache_regs); i++)
     if (cache_regs[i].type == HR_CACHED && (cache_regs[i].htype & HRT_TEMP)) {
       rcache_unlock(i);
-#if REMAP_REGISTER
       rcache_remap_vreg(i);
-#else
-      rcache_clean_vreg(i);
-#endif
     }
   rcache_regs_clean = 0;
 }
@@ -2403,6 +2441,8 @@ static void rcache_clean(void)
         emith_ctx_read(cache_regs[guest_regs[i].sreg].hreg, i*4);
       else {
         emith_move_r_r(cache_regs[guest_regs[i].sreg].hreg,
+                        cache_regs[guest_regs[i].vreg].hreg);
+        rcache_copy_x16(cache_regs[guest_regs[i].sreg].hreg,
                         cache_regs[guest_regs[i].vreg].hreg);
         rcache_remove_vreg_alias(guest_regs[i].vreg, i);
       }
@@ -2572,6 +2612,7 @@ static int emit_get_rbase_and_offs(SH2 *sh2, sh2_reg_e r, int rmode, u32 *offs)
     u32 odd = a & 1; // need to fix odd address for correct byte addressing
     la -= (s32)((a & ~mask) - *offs - odd); // diff between reg and memory
     hr = hr2 = rcache_get_reg(r, rmode, NULL);
+    if ((s32)a < 0) emith_uext_ptr(hr2);
     if ((la & ~omask) - odd) {
       hr = rcache_get_tmp();
       emith_add_r_r_ptr_imm(hr, hr2, (la & ~omask) - odd);
@@ -2621,16 +2662,9 @@ static void emit_move_r_imm32(sh2_reg_e dst, u32 imm)
 
 static void emit_move_r_r(sh2_reg_e dst, sh2_reg_e src)
 {
-  if (gconst_check(src) || rcache_is_cached(src)) {
-#if ALIAS_REGISTERS
+  if (gconst_check(src) || rcache_is_cached(src))
     rcache_alias_vreg(dst, src);
-#else
-    int hr_s = rcache_get_reg(src, RC_GR_READ, NULL);
-    int hr_d = rcache_get_reg(dst, RC_GR_WRITE, NULL);
-    emith_move_r_r(hr_d, hr_s);
-    gconst_copy(dst, src);
-#endif
-  } else {
+  else {
     int hr_d = rcache_get_reg(dst, RC_GR_WRITE, NULL);
     emith_ctx_read(hr_d, src * 4);
   }
@@ -2682,6 +2716,8 @@ static void emit_sync_t_to_sr(void)
 // rd = @(arg0)
 static int emit_memhandler_read(int size)
 {
+  int hr;
+
   emit_sync_t_to_sr();
   rcache_clean_tmp();
 #ifndef DRC_SR_REG
@@ -2704,7 +2740,9 @@ static int emit_memhandler_read(int size)
     case 2:   emith_call(sh2_drc_read32);       break; // 32
     }
 
-  return rcache_get_tmp_ret();
+  hr = rcache_get_tmp_ret();
+  rcache_set_x16(hr, (size & MF_SIZEMASK) < 2, 0);
+  return hr;
 }
 
 // @(arg0) = arg1
@@ -2740,6 +2778,7 @@ static int emit_memhandler_read_rr(SH2 *sh2, sh2_reg_e rd, sh2_reg_e rs, u32 off
       emit_move_r_imm32(rd, val);
       hr2 = rcache_get_reg(rd, RC_GR_RMW, NULL);
     }
+    rcache_set_x16(hr2, val == (s16)val, val == (u16)val);
     if (size & MF_POSTINCR)
       emit_add_r_imm(rs, 1 << (size & MF_SIZEMASK));
     return hr2;
@@ -2783,15 +2822,10 @@ static int emit_memhandler_read_rr(SH2 *sh2, sh2_reg_e rd, sh2_reg_e rs, u32 off
   }
   hr = emit_memhandler_read(size);
 
-  size &= MF_SIZEMASK;
   if (rd == SHR_TMP)
     hr2 = hr;
   else
-#if REMAP_REGISTER
-    hr2 = rcache_map_reg(rd, hr, RC_GR_WRITE);
-#else
-    hr2 = rcache_get_reg(rd, RC_GR_WRITE, NULL);
-#endif
+    hr2 = rcache_map_reg(rd, hr);
 
   if (hr != hr2) {
     emith_move_r_r(hr2, hr);
@@ -2858,15 +2892,10 @@ static int emit_indirect_indexed_read(SH2 *sh2, sh2_reg_e rd, sh2_reg_e rx, sh2_
   emith_add_r_r_r(hr, tx, ty);
   hr = emit_memhandler_read(size);
 
-  size &= MF_SIZEMASK;
   if (rd == SHR_TMP)
     hr2 = hr;
   else
-#if REMAP_REGISTER
-    hr2 = rcache_map_reg(rd, hr, RC_GR_WRITE);
-#else
-    hr2 = rcache_get_reg(rd, RC_GR_WRITE, NULL);
-#endif
+    hr2 = rcache_map_reg(rd, hr);
 
   if (hr != hr2) {
     emith_move_r_r(hr2, hr);
@@ -2942,6 +2971,120 @@ static void emit_do_static_regs(int is_write, int tmpr)
     }
   }
 }
+
+#if DIV_OPTIMIZER
+// divide operation replacement functions, called by compiled code. Only the
+// 32:16 cases and the 64:32 cases described in the SH2 prog man are replaced.
+
+static uint32_t REGPARM(2) sh2_drc_divu32(uint32_t dv, uint32_t ds)
+{
+  if (ds && ds >= dv) {
+    // good case: no divide by 0, and no result overflow
+    uint32_t quot = dv / (ds>>16), rem = dv - (quot * (ds>>16));
+    if (~quot&1) rem -= ds>>16;
+    return (uint16_t)quot | ((2*rem + (quot>>31)) << 16);
+  } else {
+    // bad case: use the sh2 algo to get the right result
+    int q = 0, t = 0, s = 16;
+    while (s--) {
+      uint32_t v = dv>>31;
+      dv = (dv<<1) | t;
+      t = v;
+      v = dv;
+      if (q)  dv += ds, q =   dv < v;
+      else    dv -= ds, q = !(dv < v);
+      q ^= t, t = !q;
+    }
+    return (dv<<1) | t;
+  }
+}
+
+static uint32_t REGPARM(3) sh2_drc_divu64(uint32_t dh, uint32_t *dl, uint32_t ds)
+{
+  if (ds > 1 && ds >= dh) {
+    // good case: no divide by 0, and no result overflow
+    uint64_t dv = *dl | ((uint64_t)dh << 32);
+    uint32_t quot = dv / ds, rem = dv - (quot * ds);
+    if (~quot&1) rem -= ds;
+    *dl = quot;
+    return rem;
+  } else {
+    // bad case: use the sh2 algo to get the right result
+    uint64_t dv = *dl | ((uint64_t)dh << 32);
+    int q = 0, t = 0, s = 32;
+    while (s--) {
+      uint64_t v = dv>>63;
+      dv = (dv<<1) | t;
+      t = v;
+      v = dv;
+      if (q)  dv += ((uint64_t)ds << 32), q =   dv < v;
+      else    dv -= ((uint64_t)ds << 32), q = !(dv < v);
+      q ^= t, t = !q;
+    }
+    *dl = (dv<<1) | t;
+    return (dv>>32);
+  }
+}
+
+static uint32_t REGPARM(2) sh2_drc_divs32(int32_t dv, int32_t ds)
+{
+  uint32_t adv = abs(dv), ads = abs(ds)>>16;
+  if (ads > 1 && ads > adv>>16 && (int32_t)ads > 0 && !(uint16_t)ds) {
+    // good case: no divide by 0, and no result overflow
+    uint32_t quot = adv / ads, rem = adv - (quot * ads);
+    int m1 = (rem ? dv^ds : ds) < 0;
+    if (rem && dv < 0)  rem = (quot&1 ? -rem : +ads-rem);
+    else                rem = (quot&1 ? +rem : -ads+rem);
+    quot = ((dv^ds)<0 ? -quot : +quot) - m1;
+    return (uint16_t)quot | ((2*rem + (quot>>31)) << 16);
+  } else {
+    // bad case: use the sh2 algo to get the right result
+    int m = (uint32_t)ds>>31, q = (uint32_t)dv>>31, t = m^q, s = 16;
+    while (s--) {
+      uint32_t v = (uint32_t)dv>>31;
+      dv = (dv<<1) | t;
+      t = v;
+      v = dv;
+      if (m^q)  dv += ds, q =   (uint32_t)dv < v;
+      else      dv -= ds, q = !((uint32_t)dv < v);
+      q ^= m^t, t = !(m^q);
+    }
+    return (dv<<1) | t;
+  }
+}
+
+static uint32_t REGPARM(3) sh2_drc_divs64(int32_t dh, uint32_t *dl, int32_t ds)
+{
+  int64_t _dv = *dl | ((int64_t)dh << 32);
+  uint64_t adv = (_dv < 0 ? -_dv : _dv); // llabs isn't in older toolchains
+  uint32_t ads = abs(ds);
+  if (ads > 1 && ads > adv>>32 && (int64_t)adv > 0) {
+    // good case: no divide by 0, and no result overflow
+    uint32_t quot = adv / ads, rem = adv - ((uint64_t)quot * ads);
+    int m1 = (rem ? dh^ds : ds) < 0;
+    if (rem && dh < 0) rem = (quot&1 ? -rem : +ads-rem);
+    else               rem = (quot&1 ? +rem : -ads+rem);
+    quot = ((dh^ds)<0 ? -quot : +quot) - m1;
+    *dl = quot;
+    return rem;
+  } else {
+    // bad case: use the sh2 algo to get the right result
+    uint64_t dv = *dl | ((uint64_t)dh << 32);
+    int m = (uint32_t)ds>>31, q = (uint64_t)dv>>63, t = m^q, s = 32;
+    while (s--) {
+      int64_t v = (uint64_t)dv>>63;
+      dv = (dv<<1) | t;
+      t = v;
+      v = dv;
+      if (m^q)  dv += ((uint64_t)ds << 32), q =   dv < v;
+      else      dv -= ((uint64_t)ds << 32), q = !(dv < v);
+      q ^= m^t, t = !(m^q);
+    }
+    *dl = (dv<<1) | t;
+    return (dv>>32);
+  }
+}
+#endif
 
 // block local link stuff
 struct linkage {
@@ -3079,6 +3222,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
   u16 *dr_pc_base;
   struct op_data *opd;
   int blkid_main = 0;
+  int skip_op = 0;
   int tmp, tmp2;
   int cycles;
   int i, v;
@@ -3091,7 +3235,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
   // get base/validate PC
   dr_pc_base = dr_get_pc_base(base_pc, sh2);
   if (dr_pc_base == (void *)-1) {
-    printf("invalid PC, aborting: %08x\n", base_pc);
+    printf("invalid PC, aborting: %08lx\n", (long)base_pc);
     // FIXME: be less destructive
     exit(1);
   }
@@ -3391,7 +3535,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
       emith_move_r_imm(tmp4, pc);
       emith_ctx_write(tmp4, SHR_PC * 4);
       rcache_invalidate_tmp();
-      emith_call(sh2_drc_log_entry);
+      emith_abicall(sh2_drc_log_entry);
       emith_restore_caller_regs(tmp);
 #endif
 
@@ -3411,7 +3555,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
       emith_save_caller_regs(tmp);
       emit_do_static_regs(1, 0);
       emith_pass_arg_r(0, CONTEXT_REG);
-      emith_call(do_sh2_cmp);
+      emith_abicall(do_sh2_cmp);
       emith_restore_caller_regs(tmp);
     }
 #endif
@@ -3443,13 +3587,17 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
       else                                              tmp3 = '*';
     } else if (drcf.loop_type)                          tmp3 = '.';
     else                                                tmp3 = ' ';
-    printf("%c%08x %04x %s\n", tmp3, pc, op, sh2dasm_buff);
+    printf("%c%08lx %04x %s\n", tmp3, (ulong)pc, op, sh2dasm_buff);
 #endif
 
     pc += 2;
 #if (DRC_DEBUG & 2)
     insns_compiled++;
 #endif
+    if (skip_op > 0) {
+      skip_op--;
+      continue;
+    }
 
     if (op_flags[i] & OF_DELAY_OP)
     {
@@ -3636,11 +3784,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
             emith_add_r_r_imm(tmp, tmp2, 2 + (op & 0xff) * 2);
         }
         tmp2 = emit_memhandler_read(opd->size);
-#if REMAP_REGISTER
-        tmp3 = rcache_map_reg(GET_Rn(), tmp2, RC_GR_WRITE);
-#else
-        tmp3 = rcache_get_reg(GET_Rn(), RC_GR_WRITE, NULL);
-#endif
+        tmp3 = rcache_map_reg(GET_Rn(), tmp2);
         if (tmp3 != tmp2) {
           emith_move_r_r(tmp3, tmp2);
           rcache_free_tmp(tmp2);
@@ -3736,6 +3880,52 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
           emith_invalidate_t();
           emith_bic_r_imm(sr, M|Q|T);
           drcf.Mflag = FLG_0;
+#if DIV_OPTIMIZER
+          if (div(opd).div1 == 16 && div(opd).ro == div(opd).rn) {
+            // divide 32/16
+            rcache_get_reg_arg(0, div(opd).rn, NULL);
+            rcache_get_reg_arg(1, div(opd).rm, NULL);
+            rcache_invalidate_tmp();
+            emith_abicall(sh2_drc_divu32);
+            tmp = rcache_get_tmp_ret();
+            tmp2 = rcache_map_reg(div(opd).rn, tmp);
+            if (tmp != tmp2)
+              emith_move_r_r(tmp2, tmp);
+
+            tmp3  = rcache_get_tmp();
+            emith_and_r_r_imm(tmp3, tmp2, 1);     // Q = !Rn[0]
+            emith_eor_r_r_imm(tmp3, tmp3, 1);
+            emith_or_r_r_lsl(sr, tmp3, Q_SHIFT);
+            rcache_free_tmp(tmp3);
+            emith_or_r_r_r_lsr(sr, sr, tmp2, 31); // T = Rn[31]
+            skip_op = div(opd).div1 + div(opd).rotcl;
+          }
+          else if (div(opd).div1 == 32 && div(opd).ro != div(opd).rn) {
+            // divide 64/32
+            tmp4 = rcache_get_reg(div(opd).ro, RC_GR_READ, NULL);
+            emith_ctx_write(tmp4, offsetof(SH2, drc_tmp));
+            tmp = rcache_get_tmp_arg(1);
+            emith_add_r_r_ptr_imm(tmp, CONTEXT_REG, offsetof(SH2, drc_tmp));
+            rcache_get_reg_arg(0, div(opd).rn, NULL);
+            rcache_get_reg_arg(2, div(opd).rm, NULL);
+            rcache_invalidate_tmp();
+            emith_abicall(sh2_drc_divu64);
+            tmp = rcache_get_tmp_ret();
+            tmp2 = rcache_map_reg(div(opd).rn, tmp);
+            tmp4 = rcache_get_reg(div(opd).ro, RC_GR_WRITE, NULL);
+            if (tmp != tmp2)
+              emith_move_r_r(tmp2, tmp);
+            emith_ctx_read(tmp4, offsetof(SH2, drc_tmp));
+
+            tmp3  = rcache_get_tmp();
+            emith_and_r_r_imm(tmp3, tmp4, 1);     // Q = !Ro[0]
+            emith_eor_r_r_imm(tmp3, tmp3, 1);
+            emith_or_r_r_lsl(sr, tmp3, Q_SHIFT);
+            rcache_free_tmp(tmp3);
+            emith_or_r_r_r_lsr(sr, sr, tmp4, 31); // T = Ro[31]
+            skip_op = div(opd).div1 + div(opd).rotcl;
+          }
+#endif
           break;
         case 2: // MOVT Rn    0000nnnn00101001
           sr   = rcache_get_reg(SHR_SR, RC_GR_READ, NULL);
@@ -3801,19 +3991,74 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
         goto end_op;
       case 0x07: // DIV0S Rm,Rn         0010nnnnmmmm0111
         sr   = rcache_get_reg(SHR_SR, RC_GR_RMW, NULL);
-        tmp2 = rcache_get_reg(GET_Rn(), RC_GR_READ, NULL);
-        tmp3 = rcache_get_reg(GET_Rm(), RC_GR_READ, NULL);
-        tmp  = rcache_get_tmp();
         emith_invalidate_t();
         emith_bic_r_imm(sr, M|Q|T);
-        emith_lsr(tmp, tmp2, 31);       // Q = Nn
-        emith_or_r_r_lsl(sr, tmp, Q_SHIFT);
-        emith_lsr(tmp, tmp3, 31);       // M = Nm
-        emith_or_r_r_lsl(sr, tmp, M_SHIFT);
-        emith_eor_r_r_lsr(tmp, tmp2, 31);
-        emith_or_r_r(sr, tmp);          // T = Q^M
-        rcache_free(tmp);
         drcf.Mflag = FLG_UNKNOWN;
+#if DIV_OPTIMIZER
+        if (div(opd).div1 == 16 && div(opd).ro == div(opd).rn) {
+          // divide 32/16
+          rcache_get_reg_arg(0, div(opd).rn, NULL);
+          tmp2 = rcache_get_reg_arg(1, div(opd).rm, NULL);
+          tmp3 = rcache_get_tmp();
+          emith_lsr(tmp3, tmp2, 31);
+          emith_or_r_r_lsl(sr, tmp3, M_SHIFT);        // M = Rm[31]
+          rcache_invalidate_tmp();
+          emith_abicall(sh2_drc_divs32);
+          tmp = rcache_get_tmp_ret();
+          tmp2 = rcache_map_reg(div(opd).rn, tmp);
+          if (tmp != tmp2)
+            emith_move_r_r(tmp2, tmp);
+          tmp3  = rcache_get_tmp();
+
+          emith_eor_r_r_r_lsr(tmp3, tmp2, sr, M_SHIFT);
+          emith_and_r_r_imm(tmp3, tmp3, 1);
+          emith_eor_r_r_imm(tmp3, tmp3, 1);
+          emith_or_r_r_lsl(sr, tmp3, Q_SHIFT);        // Q = !Rn[0]^M
+          rcache_free_tmp(tmp3);
+          emith_or_r_r_r_lsr(sr, sr, tmp2, 31);       // T = Rn[31]
+          skip_op = div(opd).div1 + div(opd).rotcl;
+        }
+        else if (div(opd).div1 == 32 && div(opd).ro != div(opd).rn) {
+          // divide 64/32
+          tmp4 = rcache_get_reg(div(opd).ro, RC_GR_READ, NULL);
+          emith_ctx_write(tmp4, offsetof(SH2, drc_tmp));
+          rcache_get_reg_arg(0, div(opd).rn, NULL);
+          tmp2 = rcache_get_reg_arg(2, div(opd).rm, NULL);
+          tmp3 = rcache_get_tmp_arg(1);
+          emith_lsr(tmp3, tmp2, 31);
+          emith_or_r_r_lsl(sr, tmp3, M_SHIFT);         // M = Rm[31]
+          emith_add_r_r_ptr_imm(tmp3, CONTEXT_REG, offsetof(SH2, drc_tmp));
+          rcache_invalidate_tmp();
+          emith_abicall(sh2_drc_divs64);
+          tmp = rcache_get_tmp_ret();
+          tmp2 = rcache_map_reg(div(opd).rn, tmp);
+          tmp4 = rcache_get_reg(div(opd).ro, RC_GR_WRITE, NULL);
+          if (tmp != tmp2)
+            emith_move_r_r(tmp2, tmp);
+          emith_ctx_read(tmp4, offsetof(SH2, drc_tmp));
+
+          tmp3  = rcache_get_tmp();
+          emith_eor_r_r_r_lsr(tmp3, tmp4, sr, M_SHIFT);
+          emith_and_r_r_imm(tmp3, tmp3, 1);
+          emith_eor_r_r_imm(tmp3, tmp3, 1);
+          emith_or_r_r_lsl(sr, tmp3, Q_SHIFT);        // Q = !Ro[0]^M
+          rcache_free_tmp(tmp3);
+          emith_or_r_r_r_lsr(sr, sr, tmp4, 31);       // T = Ro[31]
+          skip_op = div(opd).div1 + div(opd).rotcl;
+        } else
+#endif
+        {
+          tmp2 = rcache_get_reg(GET_Rn(), RC_GR_READ, NULL);
+          tmp3 = rcache_get_reg(GET_Rm(), RC_GR_READ, NULL);
+          tmp  = rcache_get_tmp();
+          emith_lsr(tmp, tmp2, 31);       // Q = Nn
+          emith_or_r_r_lsl(sr, tmp, Q_SHIFT);
+          emith_lsr(tmp, tmp3, 31);       // M = Nm
+          emith_or_r_r_lsl(sr, tmp, M_SHIFT);
+          emith_eor_r_r_lsr(tmp, tmp2, 31);
+          emith_or_r_r(sr, tmp);          // T = Q^M
+          rcache_free(tmp);
+        }
         goto end_op;
       case 0x08: // TST Rm,Rn           0010nnnnmmmm1000
         sr  = rcache_get_reg(SHR_SR, RC_GR_RMW, NULL);
@@ -3879,16 +4124,29 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
         tmp2 = rcache_get_reg(GET_Rn(), RC_GR_READ, NULL);
         tmp3 = rcache_get_reg(GET_Rm(), RC_GR_READ, NULL);
         tmp  = rcache_get_reg(SHR_MACL, RC_GR_WRITE, NULL);
-        tmp4 = rcache_get_tmp();
+        tmp4 = tmp3;
         if (op & 1) {
-          emith_sext(tmp, tmp2, 16);
-          emith_sext(tmp4, tmp3, 16);
+          if (! rcache_is_s16(tmp2)) {
+            emith_sext(tmp, tmp2, 16);
+            tmp2 = tmp;
+          }
+          if (! rcache_is_s16(tmp3)) {
+            tmp4 = rcache_get_tmp();
+            emith_sext(tmp4, tmp3, 16);
+          }
         } else {
-          emith_clear_msb(tmp, tmp2, 16);
-          emith_clear_msb(tmp4, tmp3, 16);
+          if (! rcache_is_u16(tmp2)) {
+            emith_clear_msb(tmp, tmp2, 16);
+            tmp2 = tmp;
+          }
+          if (! rcache_is_u16(tmp3)) {
+            tmp4 = rcache_get_tmp();
+            emith_clear_msb(tmp4, tmp3, 16);
+          }
         }
-        emith_mul(tmp, tmp, tmp4);
-        rcache_free_tmp(tmp4);
+        emith_mul(tmp, tmp2, tmp4);
+        if (tmp4 != tmp3)
+          rcache_free_tmp(tmp4);
         goto end_op;
       }
       goto default_;
@@ -4362,7 +4620,7 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
       case 0x03: // MOV    Rm,Rn        0110nnnnmmmm0011
         emit_move_r_r(GET_Rn(), GET_Rm());
         goto end_op;
-      case 0x07 ... 0x0f:
+      default: // 0x07 ... 0x0f
         tmp  = rcache_get_reg(GET_Rm(), RC_GR_READ, NULL);
         tmp2 = rcache_get_reg(GET_Rn(), RC_GR_WRITE, NULL);
         switch (op & 0x0f)
@@ -4408,15 +4666,19 @@ static void REGPARM(2) *sh2_translate(SH2 *sh2, int tcache_id)
           break;
         case 0x0c: // EXTU.B Rm,Rn        0110nnnnmmmm1100
           emith_clear_msb(tmp2, tmp, 24);
+          rcache_set_x16(tmp2, 1, 1);
           break;
         case 0x0d: // EXTU.W Rm,Rn        0110nnnnmmmm1101
           emith_clear_msb(tmp2, tmp, 16);
+          rcache_set_x16(tmp2, 0, 1);
           break;
         case 0x0e: // EXTS.B Rm,Rn        0110nnnnmmmm1110
           emith_sext(tmp2, tmp, 8);
+          rcache_set_x16(tmp2, 1, 0);
           break;
         case 0x0f: // EXTS.W Rm,Rn        0110nnnnmmmm1111
           emith_sext(tmp2, tmp, 16);
+          rcache_set_x16(tmp2, 1, 0);
           break;
         }
         goto end_op;
@@ -4841,10 +5103,10 @@ end_op:
   // fill blx backup; do this last to backup final patched code
   for (i = 0; i < block->entry_count; i++)
     for (bl = block->entryp[i].o_links; bl; bl = bl->o_next)
-      memcpy(bl->jdisp, bl->blx ?: bl->jump, emith_jump_at_size());
+      memcpy(bl->jdisp, bl->blx ? bl->blx : bl->jump, emith_jump_at_size());
 
   ring_alloc(&tcache_ring[tcache_id], tcache_ptr - block_entry_ptr);
-  host_instructions_updated(block_entry_ptr, tcache_ptr);
+  host_instructions_updated(block_entry_ptr, tcache_ptr, 1);
 
   dr_activate_block(block, tcache_id, sh2->is_slave);
   emith_update_cache();
@@ -4917,7 +5179,7 @@ static void sh2_generate_utils(void)
   emith_ret_c(DCOND_CC);
   EMITH_SJMP_END(DCOND_CS);
   emith_move_r_r_ptr(arg1, CONTEXT_REG);
-  emith_jump_reg(arg2);
+  emith_abijump_reg(arg2);
   emith_flush();
 
   // d = sh2_drc_read16(u32 a)
@@ -4931,7 +5193,7 @@ static void sh2_generate_utils(void)
   emith_ret_c(DCOND_CC);
   EMITH_SJMP_END(DCOND_CS);
   emith_move_r_r_ptr(arg1, CONTEXT_REG);
-  emith_jump_reg(arg2);
+  emith_abijump_reg(arg2);
   emith_flush();
 
   // d = sh2_drc_read32(u32 a)
@@ -4946,7 +5208,7 @@ static void sh2_generate_utils(void)
   emith_ret_c(DCOND_CC);
   EMITH_SJMP_END(DCOND_CS);
   emith_move_r_r_ptr(arg1, CONTEXT_REG);
-  emith_jump_reg(arg2);
+  emith_abijump_reg(arg2);
   emith_flush();
 
   // d = sh2_drc_read8_poll(u32 a)
@@ -4956,14 +5218,14 @@ static void sh2_generate_utils(void)
   emith_sh2_rcall(arg0, arg1, arg2, arg3);
   EMITH_SJMP_START(DCOND_CC);
   emith_move_r_r_ptr_c(DCOND_CS, arg1, CONTEXT_REG);
-  emith_jump_reg_c(DCOND_CS, arg2);
+  emith_abijump_reg_c(DCOND_CS, arg2);
   EMITH_SJMP_END(DCOND_CC);
   emith_and_r_r_r(arg1, arg0, arg3);
   emith_eor_r_imm_ptr(arg1, 1);
   emith_read8s_r_r_r(arg1, arg2, arg1);
   emith_push_ret(arg1);
   emith_move_r_r_ptr(arg2, CONTEXT_REG);
-  emith_call(p32x_sh2_poll_memory8);
+  emith_abicall(p32x_sh2_poll_memory8);
   emith_pop_and_ret(arg1);
   emith_flush();
 
@@ -4974,13 +5236,13 @@ static void sh2_generate_utils(void)
   emith_sh2_rcall(arg0, arg1, arg2, arg3);
   EMITH_SJMP_START(DCOND_CC);
   emith_move_r_r_ptr_c(DCOND_CS, arg1, CONTEXT_REG);
-  emith_jump_reg_c(DCOND_CS, arg2);
+  emith_abijump_reg_c(DCOND_CS, arg2);
   EMITH_SJMP_END(DCOND_CC);
   emith_and_r_r_r(arg1, arg0, arg3);
   emith_read16s_r_r_r(arg1, arg2, arg1);
   emith_push_ret(arg1);
   emith_move_r_r_ptr(arg2, CONTEXT_REG);
-  emith_call(p32x_sh2_poll_memory16);
+  emith_abicall(p32x_sh2_poll_memory16);
   emith_pop_and_ret(arg1);
   emith_flush();
 
@@ -4991,14 +5253,14 @@ static void sh2_generate_utils(void)
   emith_sh2_rcall(arg0, arg1, arg2, arg3);
   EMITH_SJMP_START(DCOND_CC);
   emith_move_r_r_ptr_c(DCOND_CS, arg1, CONTEXT_REG);
-  emith_jump_reg_c(DCOND_CS, arg2);
+  emith_abijump_reg_c(DCOND_CS, arg2);
   EMITH_SJMP_END(DCOND_CC);
   emith_and_r_r_r(arg1, arg0, arg3);
   emith_read_r_r_r(arg1, arg2, arg1);
   emith_ror(arg1, arg1, 16);
   emith_push_ret(arg1);
   emith_move_r_r_ptr(arg2, CONTEXT_REG);
-  emith_call(p32x_sh2_poll_memory32);
+  emith_abicall(p32x_sh2_poll_memory32);
   emith_pop_and_ret(arg1);
   emith_flush();
 
@@ -5031,7 +5293,7 @@ static void sh2_generate_utils(void)
 #endif
   emith_move_r_r_ptr(arg1, CONTEXT_REG);
   emith_add_r_r_ptr_imm(arg2, CONTEXT_REG, offsetof(SH2, drc_tmp));
-  emith_call(dr_lookup_block);
+  emith_abicall(dr_lookup_block);
   // store PC and block entry ptr (in arg0) in branch target cache
   emith_tst_r_r_ptr(RET_REG, RET_REG);
   EMITH_SJMP_START(DCOND_EQ);
@@ -5053,13 +5315,13 @@ static void sh2_generate_utils(void)
   // lookup failed, call sh2_translate()
   emith_move_r_r_ptr(arg0, CONTEXT_REG);
   emith_ctx_read(arg1, offsetof(SH2, drc_tmp)); // tcache_id
-  emith_call(sh2_translate);
+  emith_abicall(sh2_translate);
   emith_tst_r_r_ptr(RET_REG, RET_REG);
   EMITH_SJMP_START(DCOND_EQ);
   emith_jump_reg_c(DCOND_NE, RET_REG);
   EMITH_SJMP_END(DCOND_EQ);
   // XXX: can't translate, fail
-  emith_call(dr_failure);
+  emith_abicall(dr_failure);
   emith_flush();
 
 #if CALL_STACK
@@ -5131,13 +5393,13 @@ static void sh2_generate_utils(void)
   emith_clear_msb(tmp, tmp, 22);
   emith_move_r_r_ptr(arg2, CONTEXT_REG);
   rcache_invalidate_tmp();
-  emith_call(p32x_sh2_write32); // XXX: use sh2_drc_write32?
+  emith_abicall(p32x_sh2_write32); // XXX: use sh2_drc_write32?
   // push PC
   rcache_get_reg_arg(0, SHR_SP, NULL);
   rcache_get_reg_arg(1, SHR_PC, NULL);
   emith_move_r_r_ptr(arg2, CONTEXT_REG);
   rcache_invalidate_tmp();
-  emith_call(p32x_sh2_write32);
+  emith_abicall(p32x_sh2_write32);
   // update I, cycles, do callback
   emith_ctx_read(arg1, offsetof(SH2, pending_level));
   sr = rcache_get_reg(SHR_SR, RC_GR_RMW, NULL);
@@ -5339,7 +5601,10 @@ int sh2_execute_drc(SH2 *sh2c, int cycles)
   // others are usual SH2 flags
   sh2c->sr &= 0x3f3;
   sh2c->sr |= cycles << 12;
+
+  sh2c->state |= SH2_IN_DRC;
   sh2_drc_entry(sh2c);
+  sh2c->state &= ~SH2_IN_DRC;
 
   // TODO: irq cycles
   ret_cycles = (int32_t)sh2c->sr >> 12;
@@ -5376,7 +5641,7 @@ static void block_stats(void)
     }
     if (maxb == NULL)
       break;
-    printf("%08x %p %9d %2.3f%%\n", maxb->addr, maxb->tcache_ptr, maxb->refcount,
+    printf("%08lx %p %9d %2.3f%%\n", (ulong)maxb->addr, maxb->tcache_ptr, maxb->refcount,
       (double)maxb->refcount / total * 100.0);
     maxb->refcount = 0;
   }
@@ -5417,7 +5682,7 @@ void entry_stats(void)
     }
     if (maxb == NULL)
       break;
-    printf("%08x %p %9d %2.3f%%\n", maxb->pc, maxb->tcache_ptr, maxb->entry_count,
+    printf("%08lx %p %9d %2.3f%%\n", (ulong)maxb->pc, maxb->tcache_ptr, maxb->entry_count,
       (double)100 * maxb->entry_count / total);
     maxb->entry_count = 0;
   }
@@ -5449,25 +5714,25 @@ static void state_dump(void)
   int i;
 
   SH2_DUMP(&sh2s[0], "master");
-  printf("VBR msh2: %x\n", sh2s[0].vbr);
+  printf("VBR msh2: %lx\n", (ulong)sh2s[0].vbr);
   for (i = 0; i < 0x60; i++) {
-    printf("%08x ",p32x_sh2_read32(sh2s[0].vbr + i*4, &sh2s[0]));
+    printf("%08lx ",(ulong)p32x_sh2_read32(sh2s[0].vbr + i*4, &sh2s[0]));
     if ((i+1) % 8 == 0) printf("\n");
   }
-  printf("stack msh2: %x\n", sh2s[0].r[15]);
+  printf("stack msh2: %lx\n", (ulong)sh2s[0].r[15]);
   for (i = -0x30; i < 0x30; i++) {
-    printf("%08x ",p32x_sh2_read32(sh2s[0].r[15] + i*4, &sh2s[0]));
+    printf("%08lx ",(ulong)p32x_sh2_read32(sh2s[0].r[15] + i*4, &sh2s[0]));
     if ((i+1) % 8 == 0) printf("\n");
   }
   SH2_DUMP(&sh2s[1], "slave");
-  printf("VBR ssh2: %x\n", sh2s[1].vbr);
+  printf("VBR ssh2: %lx\n", (ulong)sh2s[1].vbr);
   for (i = 0; i < 0x60; i++) {
-    printf("%08x ",p32x_sh2_read32(sh2s[1].vbr + i*4, &sh2s[1]));
+    printf("%08lx ",(ulong)p32x_sh2_read32(sh2s[1].vbr + i*4, &sh2s[1]));
     if ((i+1) % 8 == 0) printf("\n");
   }
-  printf("stack ssh2: %x\n", sh2s[1].r[15]);
+  printf("stack ssh2: %lx\n", (ulong)sh2s[1].r[15]);
   for (i = -0x30; i < 0x30; i++) {
-    printf("%08x ",p32x_sh2_read32(sh2s[1].r[15] + i*4, &sh2s[1]));
+    printf("%08lx ",(ulong)p32x_sh2_read32(sh2s[1].r[15] + i*4, &sh2s[1]));
     if ((i+1) % 8 == 0) printf("\n");
   }
 #endif
@@ -5483,11 +5748,11 @@ static void bcache_stats(void)
 
   printf("return cache hits:%d misses:%d depth: %d index: %d/%d\n", rchit, rcmiss, i,sh2s[0].rts_cache_idx,sh2s[1].rts_cache_idx);
   for (i = 0; i < ARRAY_SIZE(sh2s[0].rts_cache); i++) {
-    printf("%08x ",sh2s[0].rts_cache[i].pc);
+    printf("%08lx ",(ulong)sh2s[0].rts_cache[i].pc);
     if ((i+1) % 8 == 0) printf("\n");
   }
   for (i = 0; i < ARRAY_SIZE(sh2s[1].rts_cache); i++) {
-    printf("%08x ",sh2s[1].rts_cache[i].pc);
+    printf("%08lx ",(ulong)sh2s[1].rts_cache[i].pc);
     if ((i+1) % 8 == 0) printf("\n");
   }
 #endif
@@ -5495,12 +5760,12 @@ static void bcache_stats(void)
   printf("branch cache hits:%d misses:%d\n", bchit, bcmiss);
   printf("branch cache master:\n");
   for (i = 0; i < ARRAY_SIZE(sh2s[0].branch_cache); i++) {
-    printf("%08x ",sh2s[0].branch_cache[i].pc);
+    printf("%08lx ",(ulong)sh2s[0].branch_cache[i].pc);
     if ((i+1) % 8 == 0) printf("\n");
   }
   printf("branch cache slave:\n");
   for (i = 0; i < ARRAY_SIZE(sh2s[1].branch_cache); i++) {
-    printf("%08x ",sh2s[1].branch_cache[i].pc);
+    printf("%08lx ",(ulong)sh2s[1].branch_cache[i].pc);
     if ((i+1) % 8 == 0) printf("\n");
   }
 #endif
@@ -5577,7 +5842,7 @@ int sh2_drc_init(SH2 *sh2)
 
     tcache_ptr = tcache;
     sh2_generate_utils();
-    host_instructions_updated(tcache, tcache_ptr);
+    host_instructions_updated(tcache, tcache_ptr, 1);
     emith_update_cache();
 
     i = tcache_ptr - tcache;
@@ -5667,6 +5932,11 @@ void sh2_drc_finish(SH2 *sh2)
       free(hash_tables[i]);
       hash_tables[i] = NULL;
     }
+
+    if (unresolved_links[i] != NULL) {
+      free(unresolved_links[i]);
+      unresolved_links[i] = NULL;
+    }
   }
 
   if (block_list_pool != NULL)
@@ -5702,7 +5972,8 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
   struct op_data *opd;
   int next_is_delay = 0;
   int end_block = 0;
-  int i, i_end;
+  int is_divop;
+  int i, i_end, i_div = -1;
   u32 crc = 0;
   // 2nd pass stuff
   int last_btarget; // loop detector 
@@ -5734,6 +6005,7 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
               (lowest_literal && lowest_literal <= pc))
       break; // text area collides with data area
 
+    is_divop = 0;
     op = FETCH_OP(pc);
     switch ((op & 0xf000) >> 12)
     {
@@ -5818,8 +6090,12 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
           break;
         case 1: // DIV0U      0000000000011001
           CHECK_UNHANDLED_BITS(0xf00, undefined);
+          opd->op = OP_DIV0;
           opd->source = BITMASK1(SHR_SR);
           opd->dest = BITMASK2(SHR_SR, SHR_T);
+          div(opd) = (struct div){ .rn=SHR_MEM, .rm=SHR_MEM, .ro=SHR_MEM };
+          i_div = i;
+          is_divop = 1;
           break;
         case 2: // MOVT Rn    0000nnnn00101001
           opd->source = BITMASK1(SHR_T);
@@ -5919,8 +6195,12 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
         opd->dest = BITMASK2(GET_Rn(), SHR_MEM);
         break;
       case 0x07: // DIV0S Rm,Rn         0010nnnnmmmm0111
+        opd->op = OP_DIV0;
         opd->source = BITMASK3(SHR_SR, GET_Rm(), GET_Rn());
         opd->dest = BITMASK2(SHR_SR, SHR_T);
+        div(opd) = (struct div){ .rn=GET_Rn(), .rm=GET_Rm(), .ro=SHR_MEM };
+        i_div = i;
+        is_divop = 1;
         break;
       case 0x08: // TST Rm,Rn           0010nnnnmmmm1000
         opd->source = BITMASK2(GET_Rm(), GET_Rn());
@@ -5965,6 +6245,19 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
       case 0x04: // DIV1    Rm,Rn       0011nnnnmmmm0100
         opd->source = BITMASK4(GET_Rm(), GET_Rn(), SHR_SR, SHR_T);
         opd->dest = BITMASK3(GET_Rn(), SHR_SR, SHR_T);
+        if (i_div >= 0) {
+          // divide operation: all DIV1 operations must use the same reg pair
+          if (div(&ops[i_div]).rn == SHR_MEM)
+            div(&ops[i_div]).rn=GET_Rn(), div(&ops[i_div]).rm=GET_Rm();
+          if (div(&ops[i_div]).rn == GET_Rn() && div(&ops[i_div]).rm == GET_Rm()) {
+            div(&ops[i_div]).div1 += 1;
+            div(&ops[i_div]).state = 0;
+            is_divop = 1;
+          } else {
+            ops[i_div].imm = 0;
+            i_div = -1;
+          }
+        }
         break;
       case 0x05: // DMULU.L Rm,Rn       0011nnnnmmmm0101
       case 0x0d: // DMULS.L Rm,Rn       0011nnnnmmmm1101
@@ -6070,6 +6363,19 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
           opd->dest = BITMASK2(GET_Rn(), SHR_T);
           break;
         case 0x24: // ROTCL  Rn          0100nnnn00100100
+          if (i_div >= 0) {
+            // divide operation: all ROTCL operations must use the same register
+            if (div(&ops[i_div]).ro == SHR_MEM)
+              div(&ops[i_div]).ro = GET_Rn();
+            if (div(&ops[i_div]).ro == GET_Rn() && !div(&ops[i_div]).state) {
+              div(&ops[i_div]).rotcl += 1;
+              div(&ops[i_div]).state = 1;
+              is_divop = 1;
+            } else {
+              ops[i_div].imm = 0;
+              i_div = -1;
+            }
+          }
         case 0x25: // ROTCR  Rn          0100nnnn00100101
           opd->source = BITMASK2(GET_Rn(), SHR_T);
           opd->dest = BITMASK2(GET_Rn(), SHR_T);
@@ -6500,7 +6806,8 @@ u16 scan_block(u32 base_pc, int is_slave, u8 *op_flags, u32 *end_pc_out,
         next_is_delay = 0;
         break;
       }
-    }
+    } else if (!is_divop && i_div >= 0)
+      i_div = -1;       // divide parser stop
   }
 end:
   i_end = i;
@@ -6508,15 +6815,17 @@ end:
 
   // 2nd pass: some analysis
   lowest_literal = end_literals = lowest_mova = 0;
-  t = T_UNKNOWN;
+  t = T_UNKNOWN; // T flag state
   last_btarget = 0;
   op = 0; // delay/poll insns counter
+  is_divop = 0; // divide op insns counter
+  i_div = -1; // index of current divide op
   for (i = 0, pc = base_pc; i < i_end; i++, pc += 2) {
     opd = &ops[i];
     crc += FETCH_OP(pc);
 
     // propagate T (TODO: DIV0U)
-    if ((op_flags[i] & OF_BTARGET) || (opd->dest & BITMASK1(SHR_T)))
+    if (op_flags[i] & OF_BTARGET)
       t = T_UNKNOWN;
 
     if ((opd->op == OP_BRANCH_CT && t == T_SET) ||
@@ -6526,10 +6835,12 @@ end:
     } else if ((opd->op == OP_BRANCH_CT && t == T_CLEAR) ||
                (opd->op == OP_BRANCH_CF && t == T_SET))
       opd->op = OP_BRANCH_N;
-    else if ((opd->op == OP_SETCLRT && !opd->imm) || opd->op == OP_BRANCH_CT)
-      t = T_CLEAR;
-    else if ((opd->op == OP_SETCLRT && opd->imm) || opd->op == OP_BRANCH_CF)
-      t = T_SET;
+    else if (OP_ISBRACND(opd->op))
+      t = (opd->op == OP_BRANCH_CF ? T_SET : T_CLEAR);
+    else if (opd->op == OP_SETCLRT)
+      t = (opd->imm ? T_SET : T_CLEAR);
+    else if (opd->dest & BITMASK1(SHR_T))
+      t = T_UNKNOWN;
 
     // "overscan" detection: unreachable code after unconditional branch
     // this can happen if the insn after a forward branch isn't a local target
@@ -6541,6 +6852,31 @@ end:
         if (i_end > i + 1 && !(op_flags[i + 1] & OF_BTARGET))
           i_end = i + 1;
       }
+    }
+
+    // divide operation verification:
+    // 1. there must not be a branch target inside
+    // 2. nothing is in a delay slot (could only be DIV0)
+    // 2. DIV0/n*(ROTCL+DIV1)/ROTCL:
+    //     div.div1 > 0 && div.rotcl == div.div1+1 && div.rn =! div.ro
+    // 3. DIV0/n*DIV1/ROTCL:
+    //     div.div1 > 0 && div.rotcl == 1 && div.ro == div.rn
+    if (i_div >= 0) {
+      if (op_flags[i] & OF_BTARGET) {   // condition 1
+        ops[i_div].imm = 0;
+        i_div = -1;
+      } else if (--is_divop == 0)
+        i_div = -1;
+    } else if (opd->op == OP_DIV0) {
+      struct div *div = &div(opd);
+      is_divop = div->div1 + div->rotcl;
+      if (op_flags[i] & OF_DELAY_OP)    // condition 2
+        opd->imm = 0;
+      else if (! div->div1 || ! ((div->ro == div->rn && div->rotcl == 1) ||
+               (div->ro != div->rn && div->rotcl == div->div1+1)))
+        opd->imm = 0;                   // condition 3+4
+      else if (is_divop)
+        i_div = i;
     }
 
     // literal pool size detection
@@ -6621,9 +6957,9 @@ end:
 
   *end_pc_out = end_pc;
   if (base_literals_out != NULL)
-    *base_literals_out = (lowest_literal ?: end_pc);
+    *base_literals_out = (lowest_literal ? lowest_literal : end_pc);
   if (end_literals_out != NULL)
-    *end_literals_out = (end_literals ?: end_pc);
+    *end_literals_out = (end_literals ? end_literals : end_pc);
 
   // crc overflow handling, twice to collect all overflows
   crc = (crc & 0xffff) + (crc >> 16);

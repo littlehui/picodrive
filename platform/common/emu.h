@@ -147,7 +147,7 @@ void  emu_sound_stop(void);
 void  emu_sound_wait(void);
 
 /* used by some (but not all) platforms */
-void  emu_cmn_forced_frame(int no_scale, int do_emu);
+void  emu_cmn_forced_frame(int no_scale, int do_emu, void *buf);
 
 /* stuff to be implemented by platform code */
 extern const char *renderer_names[];
@@ -173,8 +173,13 @@ void plat_status_msg_clear(void);
 
 void plat_video_toggle_renderer(int change, int menu_call);
 void plat_video_loop_prepare(void);
+void plat_video_set_buffer(void *);
 
 void plat_update_volume(int has_changed, int is_up);
+
+/* should be in libpicofe/plat.h */
+void plat_video_clear_status(void);
+void plat_video_clear_buffers(void);
 
 #ifdef __cplusplus
 } // extern "C"
