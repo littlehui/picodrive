@@ -1,6 +1,0 @@
-title=Sega CD
-description=PicoDrive Emulator
-exec=/home/retrofw/emus/picodrive/picodrive.dge
-selectordir=/home/retrofw/roms/segacd
-selectorfilter=.iso,.cue,.bin
-clock=600

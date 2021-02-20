@@ -3,6 +3,8 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cpu/cyclone" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/pico/sound/emu2413" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/platform/common/minimp3" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/platform/libpicofe" vcs="Git" />
   </component>
 </project>

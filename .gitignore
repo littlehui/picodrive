@@ -25,7 +25,7 @@ cfg/
 libs/
 obj/
 .opk_data
-PicoDrive
+../origindata/picodrive
 PicoDrive.opk
 pico_int_offs.h
 amalgamate
