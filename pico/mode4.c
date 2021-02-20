@@ -359,7 +359,9 @@ static void FinalizeLineRGB555M4(int line)
 
   // standard FinalizeLine can finish it for us,
   // with features like scaling and such
-  FinalizeLine555(0, line, &Pico.est);
+    fprintf(stderr, "FinalizeLiFinalizeLineRGB555M4 ne555  plat_video_loop_prepare plat_sdl_screen w , plat_sdl_screen\n");
+
+    FinalizeLine555(0, line, &Pico.est);
 }
 
 static void FinalizeLine8bitM4(int line)

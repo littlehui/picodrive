@@ -217,7 +217,9 @@ int PicoReset(void)
 // flush config changes before emu loop starts
 void PicoLoopPrepare(void)
 {
-  if (PicoIn.regionOverride)
+    fprintf(stderr, "PicoLoopPrepare\n");
+
+    if (PicoIn.regionOverride)
     // force setting possibly changed..
     Pico.m.pal = (PicoIn.regionOverride == 2 || PicoIn.regionOverride == 8) ? 1 : 0;
 

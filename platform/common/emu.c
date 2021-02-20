@@ -51,6 +51,7 @@ void *g_screen_ptr;
 int g_screen_width  = 320;
 int g_screen_height = 240;
 int g_screen_ppitch = 320; // pitch in pixels
+int heigh_need_fill = 0;
 
 const char *PicoConfigFile = "config2.cfg";
 currentConfig_t currentConfig, defaultConfig;
@@ -1376,8 +1377,10 @@ void emu_loop(void)
 
 	PicoLoopPrepare();
 
-	plat_video_loop_prepare();
-	emu_loop_prep();
+    plat_video_loop_prepare();
+
+    emu_loop_prep();
+
 	pemu_sound_start();
 
 	/* number of ticks per frame */
@@ -1392,7 +1395,7 @@ void emu_loop(void)
 	/* loop with resync every 1 sec. */
 	while (engineState == PGS_Running)
 	{
-		int skip = 0;
+        int skip = 0;
 		int diff;
 
 		pprof_start(main);
@@ -1489,7 +1492,8 @@ void emu_loop(void)
 		}
 
 		emu_update_input();
-		if (skip) {
+
+        if (skip) {
 			int do_audio = diff > -target_frametime_x3 * 2;
 			PicoIn.skipFrame = do_audio ? 1 : 2;
 			PicoFrame();
@@ -1503,8 +1507,9 @@ void emu_loop(void)
 		frames_done++;
 		timestamp_aim_x3 += target_frametime_x3;
 
-		if (!skip && !flip_after_sync)
-			plat_video_flip();
+		if (!skip && !flip_after_sync) {
+            plat_video_flip();
+        }
 
 		/* frame limiter */
 		if (!skip && !reset_timing
@@ -1526,8 +1531,10 @@ void emu_loop(void)
 			}
 		}
 
-		if (!skip && flip_after_sync)
-			plat_video_flip();
+		if (!skip && flip_after_sync) {
+            plat_video_flip();
+        }
+
 
 		pprof_end(main);
 	}

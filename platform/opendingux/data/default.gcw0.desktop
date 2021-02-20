@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Picodrive
+Name=MD-197
 Comment=A megadrive/genesis emulator
 Exec=PicoDrive %f
 Icon=megadrive

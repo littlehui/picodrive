@@ -45,7 +45,19 @@
 
 #include "pico_int.h"
 #define FORCE	// layer forcing via debug register?
+#include <SDL/SDL.h>
+#include "../platform/libpicofe/plat.h"
 
+extern SDL_Surface *plat_sdl_screen;
+extern int g_screen_width;
+extern int g_screen_height;
+extern int g_screen_ppitch;
+extern int engineState;
+extern int heigh_need_fill;
+extern void plat_video_loop_prepare2();
+extern int vout_mode_hw_scanline_vertical, vout_mode_hw2;
+extern struct plat_target plat_target;
+extern int hardwarex2Flag;
 int (*PicoScanBegin)(unsigned int num) = NULL;
 int (*PicoScanEnd)  (unsigned int num) = NULL;
 
@@ -1633,25 +1645,45 @@ void FinalizeLine555(int sh, int line, struct PicoEState *est)
   unsigned short *pd=est->DrawLineDest;
   unsigned char  *ps=est->HighCol+8;
   unsigned short *pal=est->HighPal;
-  int len;
+  //int len;
 
   if (DrawLineDestIncrement == 0)
     return;
 
   PicoDrawUpdateHighPal();
 
-  if (Pico.video.reg[12]&1) {
-    len = 320;
-  } else {
-    if (!(PicoIn.opt&POPT_DIS_32C_BORDER)) pd+=32;
-    len = 256;
-  }
+    if (hardwarex2Flag) {
+        g_screen_width = (Pico.video.reg[12] & 1) ? 640 : 512;
+        //g_screen_height = (Pico.video.reg[1] & 8) ? 480 : plat_target.vout_method == vout_mode_hw2 ? 448 : 480;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 480 : 448;
+        g_screen_ppitch = g_screen_width;
+    } else {
+        g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
+        g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
+        g_screen_ppitch = g_screen_width;
+    }
+    if (!(Pico.video.reg[1] & 8) && plat_target.vout_method != vout_mode_hw2) {
+        //hight not enough and scanline need fill
+        heigh_need_fill = 1;
+    } else {
+        //hight enough
+        heigh_need_fill = 0;
+    }
+     //g_screen_width = (Pico.video.reg[12] & 1) ? 320 : 256;
+     //g_screen_height = (Pico.video.reg[1] & 8) ? 240 : 224;
+     //g_screen_ppitch = g_screen_width;
 
-  {
+    if ((plat_sdl_screen->w != g_screen_width || plat_sdl_screen->h != g_screen_height) && engineState == 2) {
+        plat_video_loop_prepare2();
+    }
+
+
+
+    {
 #if 1
     int i;
 
-    for (i = len; i > 0; i-=4) {
+    for (i = g_screen_width; i > 0; i-=4) {
       *pd++ = pal[*ps++];
       *pd++ = pal[*ps++];
       *pd++ = pal[*ps++];
@@ -1828,7 +1860,8 @@ static int DrawDisplay(int sh)
 // MUST be called every frame
 PICO_INTERNAL void PicoFrameStart(void)
 {
-  int offs = 8, lines = 224;
+  //int offs = 8, lines = 224;
+  int offs = 0, lines = 224;
   int dirty = ((Pico.est.rendstatus & PDRAW_SONIC_MODE) || Pico.m.dirtyPal);
   int sprep = Pico.est.rendstatus & (PDRAW_SPRITES_MOVED|PDRAW_DIRTY_SPRITES);
   int skipped = Pico.est.rendstatus & PDRAW_SKIP_FRAME;
@@ -1997,7 +2030,10 @@ void PicoDrawSetOutFormat(pdso_t which, int use_32x_line_mode)
       if ((PicoIn.AHW & PAHW_32X) && use_32x_line_mode)
         FinalizeLine = FinalizeLine32xRGB555;
       else
-        FinalizeLine = FinalizeLine555;
+          {
+            //fprintf(stderr, "FinalizeLine \n");
+            FinalizeLine = FinalizeLine555;
+          }
       break;
 
     default:

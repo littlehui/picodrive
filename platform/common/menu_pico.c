@@ -88,10 +88,12 @@ static void make_bg(int no_scale, int from_screen)
 	int w = g_menubg_src_w ? g_menubg_src_w : g_screen_width;
 	int h = g_menubg_src_h ? g_menubg_src_h : g_screen_height;
 	int pp = g_menubg_src_pp ? g_menubg_src_pp : g_screen_ppitch;
-	short *dst;
+
+    short *dst;
 	int x, y;
 
 	if (from_screen) {
+        fprintf(stderr, "make_bg from_screen \n");
 		src = g_screen_ptr;
 		w = g_screen_width;
 		h = g_screen_height;
@@ -99,7 +101,8 @@ static void make_bg(int no_scale, int from_screen)
 	}
 
 	if (src == NULL) {
-		memset(g_menubg_ptr, 0, g_menuscreen_w * g_menuscreen_h * 2);
+        fprintf(stderr, "make_bg src == NULL w = %d, h = %d\n", g_menuscreen_w, g_menuscreen_h);
+        memset(g_menubg_ptr, 0, g_menuscreen_w * g_menuscreen_h * 2);
 		return;
 	}
 
@@ -117,8 +120,10 @@ static void make_bg(int no_scale, int from_screen)
 				d[x] = d[x + g_menuscreen_w / 2] = t;
 			}
 		}
-		return;
+        fprintf(stderr, "!no_scale && g_menuscreen_w / w >= 2 && g_menuscreen_h / h >= 2\n");
+        return;
 	}
+    fprintf(stderr, "need menu_darken_bg\n");
 
 	if (w > g_menuscreen_w)
 		w = g_menuscreen_w;
@@ -131,6 +136,8 @@ static void make_bg(int no_scale, int from_screen)
 	// darken the active framebuffer
 	for (; h > 0; dst += g_menuscreen_w, src += pp, h--)
 		menu_darken_bg(dst, src, w, 1);
+
+
 }
 
 static void copy_bg(int dir)
@@ -149,7 +156,9 @@ static void copy_bg(int dir)
 
 static void menu_enter(int is_rom_loaded)
 {
-	if (is_rom_loaded)
+    fprintf(stderr, "menu_enter-----------------------------\n");
+
+    if (is_rom_loaded)
 	{
 		make_bg(0, 0);
 	}

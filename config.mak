@@ -5,10 +5,11 @@ CXX = mipsel-gcw0-linux-uclibc-g++
 AS = mipsel-gcw0-linux-uclibc-as
 STRIP = mipsel-gcw0-linux-uclibc-strip
 CFLAGS += -I/opt/gcw0-toolchain/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include -I/opt/gcw0-toolchain/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include/SDL -I/opt/gcw0-toolchain/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/include/SDL -D_GNU_SOURCE=1 -D_REENTRANT -Wno-unused-result
-ASFLAGS += 
+ASFLAGS +=
 LDFLAGS += --sysroot /opt/gcw0-toolchain/usr/mipsel-gcw0-linux-uclibc/sysroot
 LDLIBS += -L/opt/gcw0-toolchain/usr/mipsel-gcw0-linux-uclibc/sysroot/usr/lib -lSDL -lpthread -lpng  -lm -lz
 
 ARCH = mipsel
 PLATFORM = opendingux
 SOUND_DRIVERS = sdl
+

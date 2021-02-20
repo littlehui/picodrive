@@ -18,9 +18,13 @@
 #include "input_pico.h"
 #include "plat_sdl.h"
 #include "version.h"
+#include "scaler.h"
 
 #include <pico/pico.h>
 
+extern int vout_mode_hw2, vout_mode_hw_scanline, vout_mode_hw_grid, vout_mode_hw_scanline_vertical, vout_mode_auto_scanline;
+extern struct plat_target plat_target;
+extern int hardwarex2Flag;
 static void *shadow_fb;
 
 static struct in_pdata in_sdl_platform_data = {
@@ -124,21 +128,62 @@ void plat_video_flip(void)
 			SDL_UnlockSurface(plat_sdl_screen);
 			SDL_Flip(plat_sdl_screen);
 			SDL_LockSurface(plat_sdl_screen);
-		} else
-			SDL_Flip(plat_sdl_screen);
-		g_screen_ptr = plat_sdl_screen->pixels;
-		plat_video_set_buffer(g_screen_ptr);
+		} else {
+            SDL_Flip(plat_sdl_screen);
+        }
+
+        g_screen_ptr = plat_sdl_screen->pixels;
+
+        if (hardwarex2Flag) {
+		    //scanline
+            if (plat_target.vout_method == vout_mode_hw_scanline) {
+                upscale_inter_x2_scanline((uint32_t *) plat_sdl_screen->pixels, (uint32_t *) plat_sdl_screen_ptr,
+                                          plat_sdl_screen->w, plat_sdl_screen->h);
+            } else if (plat_target.vout_method == vout_mode_hw2) {
+                upscale_inter_x2((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else if (plat_target.vout_method == vout_mode_hw_grid) {
+                upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else if (plat_target.vout_method == vout_mode_hw_scanline_vertical) {
+                upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+            } else if (plat_target.vout_method == vout_mode_auto_scanline) {
+                if (g_screen_width == 640 && g_screen_height == 448) {
+                    //vertical
+                    upscale_inter_x2_scanline_vertical((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                } else if (g_screen_width == 512 && g_screen_height == 480) {
+                    upscale_inter_x2_scanline((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                } else {
+                    upscale_inter_x2_grid((uint32_t*)plat_sdl_screen->pixels, (uint32_t*)plat_sdl_screen_ptr,plat_sdl_screen->w, plat_sdl_screen->h);
+                }
+            }
+            PicoDrawSetOutBuf(plat_sdl_screen_ptr, g_screen_ppitch);
+        } else {
+		    //sdl_window
+            g_screen_ptr = plat_sdl_screen->pixels;
+            plat_video_set_buffer(g_screen_ptr);
+        }
 		if (clear_buf_cnt) {
-			memset(g_screen_ptr, 0, plat_sdl_screen->w*plat_sdl_screen->h * 2);
-			clear_buf_cnt--;
+		    if (hardwarex2Flag) {
+                memset(plat_sdl_screen_ptr, 0, plat_sdl_screen->w*plat_sdl_screen->h * 2);
+            } else {
+                memset(g_screen_ptr, 0, plat_sdl_screen->w*plat_sdl_screen->h * 2);
+            }
+            clear_buf_cnt--;
 		}
 	}
-	if (clear_stat_cnt) {
-		unsigned short *d = (unsigned short *)g_screen_ptr + g_screen_ppitch * g_screen_height;
-		int l = g_screen_ppitch * 8;
-		memset((int *)(d - l), 0, l * 2);
-		clear_stat_cnt--;
-	}
+
+    if (clear_stat_cnt) {
+        if (hardwarex2Flag) {
+            unsigned short *d = (unsigned short *)plat_sdl_screen_ptr + g_screen_ppitch * g_screen_height;
+            int l = g_screen_ppitch * 8;
+            memset((int *)(d - l), 0, l * 2);
+            clear_stat_cnt--;
+        } else {
+            unsigned short *d = (unsigned short *)g_screen_ptr + g_screen_ppitch * g_screen_height;
+            int l = g_screen_ppitch * 8;
+            memset((int *)(d - l), 0, l * 2);
+            clear_stat_cnt--;
+        }
+    }
 }
 
 void plat_video_wait_vsync(void)
@@ -164,7 +209,11 @@ void plat_video_menu_enter(int is_rom_loaded)
 {
 	if (SDL_MUSTLOCK(plat_sdl_screen))
 		SDL_UnlockSurface(plat_sdl_screen);
-	plat_sdl_change_video_mode(g_menuscreen_w, g_menuscreen_h, 0);
+    //fprintf(stderr, "plat_video_menu_enter\n");
+    //fprintf(stderr, "g_menuscreen_w = %d\n", g_menuscreen_w);
+    //fprintf(stderr, "g_menuscreen_h = %d\n", g_menuscreen_h);
+
+    plat_sdl_change_video_mode(g_menuscreen_w, g_menuscreen_h, 0);
 	g_screen_ptr = shadow_fb;
 	plat_video_set_buffer(g_screen_ptr);
 }
@@ -207,27 +256,60 @@ void plat_video_menu_end(void)
 
 void plat_video_menu_leave(void)
 {
+    if (plat_target.vout_method == 0) {
+        hardwarex2Flag = 0;
+    }
+    fprintf(stderr, "plat_video_menu_leave  w = %d, h = %d\n", g_screen_width, g_screen_height);
+    plat_sdl_change_video_mode(g_screen_width, g_screen_height, 0);
 }
 
 void plat_video_loop_prepare(void)
 {
-	if (plat_sdl_overlay != NULL || plat_sdl_gl_active) {
-		g_screen_ptr = shadow_fb;
-		g_screen_width = 320;
-		g_screen_height = 240;
-		g_screen_ppitch = g_screen_width;
+    if (plat_sdl_overlay != NULL || plat_sdl_gl_active) {
+        g_screen_ptr = shadow_fb;
+        g_screen_width = 320;
+        g_screen_height = 240;
+        g_screen_ppitch = g_screen_width;
 	}
 	else {
 		if (SDL_MUSTLOCK(plat_sdl_screen))
 			SDL_LockSurface(plat_sdl_screen);
-		g_screen_ptr = plat_sdl_screen->pixels;
-		g_screen_width = g_menuscreen_w;
-		g_screen_height = g_menuscreen_h;
-		g_screen_ppitch = g_menuscreen_pp;
-	}
-	plat_video_set_buffer(g_screen_ptr);
 
-	plat_sdl_change_video_mode(g_screen_width, g_screen_height, 0);
+        g_screen_ptr = plat_sdl_screen->pixels;
+
+#if defined(__RG350__) || defined(__GCW0__)
+        //hardware no need set
+#else
+        g_screen_width = g_menuscreen_w;
+        g_screen_height = g_menuscreen_h;
+        g_screen_ppitch = g_menuscreen_pp;
+
+#endif
+
+    }
+    plat_video_set_buffer(g_screen_ptr);
+    plat_sdl_change_video_mode(g_screen_width, g_screen_height, 0);
+}
+
+void plat_video_loop_prepare2(void)
+{
+    //littlehui modify
+    fprintf(stderr, "plat_video_loop_prepare2  w = %d, h = %d\n", g_screen_width, g_screen_height);
+    if (!hardwarex2Flag) {
+        g_menuscreen_w = g_screen_width;
+        g_menuscreen_h = g_screen_height;
+        g_menuscreen_pp = g_screen_ppitch;
+    }
+    if (plat_sdl_overlay != NULL || plat_sdl_gl_active) {
+        g_screen_ptr = shadow_fb;
+    }
+    else {
+        if (SDL_MUSTLOCK(plat_sdl_screen))
+            SDL_LockSurface(plat_sdl_screen);
+        g_screen_ptr = plat_sdl_screen->pixels;
+    }
+    plat_video_set_buffer(g_screen_ptr);
+    plat_sdl_change_video_mode(g_screen_width, g_screen_height, 0);
 }
 
 void plat_early_init(void)
@@ -264,21 +346,31 @@ void plat_init(void)
 	g_menuscreen_ptr = NULL;
 
 	shadow_size = g_menuscreen_w * g_menuscreen_h * 2;
-	if (shadow_size < 320 * 480 * 2)
-		shadow_size = 320 * 480 * 2;
-
+/*	if (shadow_size < 320 * 480 * 2)
+		shadow_size = 320 * 480 * 2;*/
+    if (shadow_size < 640 * 480 * 2)
+        shadow_size = 640 * 480 * 2;
 	shadow_fb = calloc(1, shadow_size);
+	//shadow_fb = malloc(g_menuscreen_w * g_menuscreen_h);
 	g_menubg_ptr = calloc(1, shadow_size);
-	if (shadow_fb == NULL || g_menubg_ptr == NULL) {
+    plat_sdl_screen_ptr = calloc(1, shadow_size);
+
+    if (shadow_fb == NULL || g_menubg_ptr == NULL) {
 		fprintf(stderr, "OOM\n");
 		exit(1);
 	}
 
-	g_screen_width = 320;
-	g_screen_height = 240;
-	g_screen_ppitch = 320;
-	g_screen_ptr = shadow_fb;
-
+    if (hardwarex2Flag) {
+        g_screen_width = 640;
+        g_screen_height = 480;
+        g_screen_ppitch = 640;
+        g_screen_ptr = shadow_fb;
+    } else {
+		g_screen_width = 320;
+		g_screen_height = 240;
+		g_screen_ppitch = 320;
+		g_screen_ptr = shadow_fb;
+	}
 	in_sdl_platform_data.kmap_size = in_sdl_key_map_sz,
 	in_sdl_platform_data.jmap_size = in_sdl_joy_map_sz,
 	in_sdl_platform_data.key_names = *in_sdl_key_names,
@@ -295,4 +387,5 @@ void plat_finish(void)
 	free(g_menubg_ptr);
 	g_menubg_ptr = NULL;
 	plat_sdl_finish();
+    plat_sdl_screen_ptr = NULL;
 }

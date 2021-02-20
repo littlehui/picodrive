@@ -84,8 +84,14 @@ static void draw_cd_leds(void)
 static unsigned short *get_16bit_start(unsigned short *buf)
 {
 	// center the output on the screen
-	int offs = (g_screen_height-240)/2 * g_screen_ppitch + (g_screen_width-320)/2;
-	return buf + offs;
+#if defined(__RG350__) || defined(__GCW0__)
+    //hardware
+    return buf;
+#else
+    int offs = (g_screen_height-240)/2 * g_screen_ppitch + (g_screen_width-320)/2;
+    return buf + offs;
+
+#endif
 }
 
 void pemu_finalize_frame(const char *fps, const char *notice)
@@ -118,8 +124,9 @@ void pemu_finalize_frame(const char *fps, const char *notice)
 
 void plat_video_set_buffer(void *buf)
 {
-	if (is_16bit_mode())
-		PicoDrawSetOutBuf(get_16bit_start(buf), g_screen_ppitch * 2);
+    if (is_16bit_mode()) {
+        PicoDrawSetOutBuf(get_16bit_start(buf), g_screen_ppitch * 2);
+    }
 }
 
 static void apply_renderer(void)

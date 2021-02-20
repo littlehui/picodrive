@@ -42,7 +42,7 @@ endif
 endif
 
 ifeq "$(DEBUG)" "0"
-	CFLAGS += -O3 -DNDEBUG
+	CFLAGS += -O3 -DNDEBUG -g
 endif
 	LD = $(CC)
 	OBJOUT ?= -o
@@ -51,7 +51,7 @@ endif
 
 ifeq ("$(PLATFORM)",$(filter "$(PLATFORM)","gp2x" "opendingux" "rpi1"))
 # very small caches, avoid optimization options making the binary much bigger
-CFLAGS += -finline-limit=42 -fno-unroll-loops -fno-ipa-cp -ffast-math
+CFLAGS += -finline-limit=42 -fno-unroll-loops -fno-ipa-cp -ffast-math -D__RG350__
 # this gets you about 20% better execution speed on 32bit arm/mips
 CFLAGS += -fno-common -fno-stack-protector -fno-guess-branch-probability -fno-caller-saves -fno-tree-loop-if-convert -fno-regmove
 endif
@@ -119,6 +119,7 @@ OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
 OBJS += platform/libpicofe/plat_dummy.o platform/libpicofe/linux/plat.o
 OBJS += platform/libpicofe/gl.o
 OBJS += platform/libpicofe/gl_platform.o
+OBJS += platform/common/scaler.o
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "generic"
@@ -131,6 +132,7 @@ OBJS += platform/common/plat_sdl.o platform/common/inputmap_kbd.o
 endif
 OBJS += platform/libpicofe/plat_sdl.o platform/libpicofe/in_sdl.o
 OBJS += platform/libpicofe/plat_dummy.o platform/libpicofe/linux/plat.o
+OBJS += platform/common/scaler.o
 USE_FRONTEND = 1
 endif
 ifeq "$(PLATFORM)" "pandora"

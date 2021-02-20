@@ -118,6 +118,7 @@ void FinalizeLine32xRGB555(int sh, int line, struct PicoEState *est)
   unsigned char  *pmd = est->HighCol + 8;
   unsigned short *dram, *p32x;
   unsigned char   mdbg;
+    fprintf(stderr, "FinalizeLine32xRGB555  plat_video_loop_prepare plat_sdl_screen w plat_sdl_screen ");
 
   FinalizeLine555(sh, line, est);
 
